@@ -3,11 +3,13 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, AppBar, Toolbar, Typography, IconButton, Button, CircularProgress,
   Alert, List, ListItem, ListItemButton, ListItemText, Chip, Divider,
-  Tooltip, Menu, MenuItem,
+  Tooltip, Menu, MenuItem, Tabs, Tab,
 } from '@mui/material';
 import { ArrowBack, Upload, ZoomIn, Download } from '@mui/icons-material';
 import ToolbarComponent from '../components/Toolbar.jsx';
 import ViewerViewport from '../components/ViewerViewport.jsx';
+import StructurePanel from '../components/StructurePanel.jsx';
+import DosePanel from '../components/DosePanel.jsx';
 import { initCornerstone } from '../initCornerstone.js';
 
 export default function StudyViewerPage() {
@@ -26,6 +28,20 @@ export default function StudyViewerPage() {
   const [modalities, setModalities] = useState([]);
   const [csReady, setCsReady] = useState(false);
   const [aiAnchor, setAiAnchor] = useState(null);
+
+  // RT Structure state
+  const [structures, setStructures] = useState([]);
+  const [selectedStructureId, setSelectedStructureId] = useState(null);
+  const [structureVisibility, setStructureVisibility] = useState({});
+
+  // RT Dose state
+  const [doseData, setDoseData] = useState(null);
+  const [doseVisible, setDoseVisible] = useState(false);
+  const [doseOpacity, setDoseOpacity] = useState(0.5);
+  const [doseThreshold, setDoseThreshold] = useState(20);
+
+  // Right panel tab
+  const [rightTab, setRightTab] = useState(0);
 
   useEffect(() => {
     initCornerstone().then(() => setCsReady(true)).catch(err => setError('Failed to initialize Cornerstone'));
@@ -47,10 +63,57 @@ export default function StudyViewerPage() {
       setModalities(mods);
       if (mods.includes('CT')) setActiveModality('CT');
       else if (mods.length) setActiveModality(mods[0]);
+
+      // Fetch RTSTRUCT data
+      const rtStructFile = data.study.files?.find(f => f.modality === 'RTSTRUCT');
+      if (rtStructFile) {
+        fetchRTSTRUCT(rtStructFile.id);
+      }
+
+      // Fetch RTDOSE data
+      const rtDoseFile = data.study.files?.find(f => f.modality === 'RTDOSE');
+      if (rtDoseFile) {
+        fetchRTDOSE(rtDoseFile.id);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchRTSTRUCT(fileId) {
+    try {
+      const res = await fetch(`/api/rtstruct/${fileId}`, { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.roiSequence) {
+        // Initialize structures with visibility
+        const initialStructures = data.roiSequence.map(roi => ({
+          ...roi,
+          visible: true,
+        }));
+        setStructures(initialStructures);
+        setStructureVisibility(
+          initialStructures.reduce((acc, s) => ({ ...acc, [s.roiNumber]: true }), {})
+        );
+        if (initialStructures.length > 0) {
+          setSelectedStructureId(initialStructures[0].roiNumber);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch RTSTRUCT:', err);
+    }
+  }
+
+  async function fetchRTDOSE(fileId) {
+    try {
+      const res = await fetch(`/api/rtdose/${fileId}`, { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json();
+      setDoseData(data);
+    } catch (err) {
+      console.error('Failed to fetch RTDOSE:', err);
     }
   }
 
@@ -88,6 +151,20 @@ export default function StudyViewerPage() {
     const res = await fetch(`/api/files/signed-url/${fileId}`, { credentials: 'include' });
     const data = await res.json();
     return data.url;
+  }
+
+  function handleToggleStructure(roiNumber) {
+    setStructureVisibility(prev => {
+      const newVisibility = { ...prev, [roiNumber]: !prev[roiNumber] };
+      setStructures(prev => prev.map(s =>
+        s.roiNumber === roiNumber ? { ...s, visible: newVisibility[roiNumber] } : s
+      ));
+      return newVisibility;
+    });
+  }
+
+  function handleSelectStructure(roiNumber) {
+    setSelectedStructureId(roiNumber);
   }
 
   if (loading) {
@@ -220,6 +297,53 @@ export default function StudyViewerPage() {
               </Typography>
             </Box>
           )}
+        </Box>
+
+        {/* Right sidebar - Structure/Dose panels */}
+        <Box
+          sx={{
+            width: 260,
+            borderLeft: '1px solid rgba(88,196,220,0.12)',
+            background: 'background.paper',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <Tabs
+            value={rightTab}
+            onChange={(_, v) => setRightTab(v)}
+            variant="fullWidth"
+            sx={{
+              minHeight: 36,
+              borderBottom: '1px solid rgba(88,196,220,0.12)',
+              '& .MuiTab-root': { minHeight: 36, fontSize: '0.7rem', fontFamily: 'mono' },
+            }}
+          >
+            <Tab label="Structures" />
+            <Tab label="Dose" />
+          </Tabs>
+
+          <Box sx={{ flex: 1, overflow: 'auto' }}>
+            {rightTab === 0 && (
+              <StructurePanel
+                structures={structures}
+                onToggle={handleToggleStructure}
+                onSelect={handleSelectStructure}
+                selectedStructureId={selectedStructureId}
+              />
+            )}
+            {rightTab === 1 && (
+              <DosePanel
+                doseData={doseData}
+                visible={doseVisible}
+                opacity={doseOpacity}
+                threshold={doseThreshold}
+                onVisibleChange={setDoseVisible}
+                onOpacityChange={setDoseOpacity}
+                onThresholdChange={setDoseThreshold}
+              />
+            )}
+          </Box>
         </Box>
       </Box>
     </Box>

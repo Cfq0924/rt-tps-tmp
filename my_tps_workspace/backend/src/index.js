@@ -10,6 +10,8 @@ import filesPublicRoutes from './routes/filesPublic.js';
 import patientsRoutes from './routes/patients.js';
 import studiesRoutes from './routes/studies.js';
 import contouringRoutes from './routes/contouring.js';
+import rtStructRoutes from './routes/rtStruct.js';
+import rtDoseRoutes from './routes/rtDose.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -69,6 +71,8 @@ app.use('/api/files', authMiddleware, filesRoutes);
 app.use('/api/patients', authMiddleware, patientsRoutes);
 app.use('/api/studies', authMiddleware, studiesRoutes);
 app.use('/api/contouring', authMiddleware, contouringRoutes);
+app.use('/api/rtstruct', authMiddleware, rtStructRoutes);
+app.use('/api/rtdose', authMiddleware, rtDoseRoutes);
 
 // Error handling
 app.use(notFoundHandler);

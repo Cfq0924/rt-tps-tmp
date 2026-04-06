@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import LoginPage from './components/LoginPage.jsx';
 import PatientListPage from './pages/PatientListPage.jsx';
+import PatientDetailPage from './pages/PatientDetailPage.jsx';
 import StudyViewerPage from './pages/StudyViewerPage.jsx';
 
 function ProtectedRoute({ children }) {
@@ -29,6 +30,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <PatientListPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/patients/:patientId"
+          element={
+            <ProtectedRoute>
+              <PatientDetailPage />
             </ProtectedRoute>
           }
         />
