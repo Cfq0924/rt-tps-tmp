@@ -15,6 +15,7 @@
     "test:e2e": "npm run test:e2e -w frontend"
   },
   "devDependencies": {
+    "@originjs/vite-plugin-commonjs": "^1.0.3",
     "concurrently": "^9.1.0"
   }
 }

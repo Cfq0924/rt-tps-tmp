@@ -9,6 +9,33 @@ const DOWNLOAD_EXPIRY_SECONDS = 900; // 15 minutes
 export function registerDicomFile({ studyId, metadata, filePath, userId, reqId }) {
   const db = getDb();
 
+  // Extract positioning data from metadata
+  let imagePositionX = null, imagePositionY = null, imagePositionZ = null;
+  let pixelSpacingX = null, pixelSpacingY = null;
+  let rows = null, columns = null;
+
+  if (metadata.imagePositionPatient) {
+    if (Array.isArray(metadata.imagePositionPatient)) {
+      imagePositionX = metadata.imagePositionPatient[0];
+      imagePositionY = metadata.imagePositionPatient[1];
+      imagePositionZ = metadata.imagePositionPatient[2];
+    } else if (typeof metadata.imagePositionPatient === 'number') {
+      imagePositionX = metadata.imagePositionPatient;
+    }
+  }
+
+  if (metadata.pixelSpacing) {
+    if (Array.isArray(metadata.pixelSpacing)) {
+      pixelSpacingX = metadata.pixelSpacing[0];
+      pixelSpacingY = metadata.pixelSpacing[1];
+    } else if (typeof metadata.pixelSpacing === 'number') {
+      pixelSpacingX = metadata.pixelSpacing;
+    }
+  }
+
+  if (metadata.rows) rows = metadata.rows;
+  if (metadata.columns) columns = metadata.columns;
+
   // Upsert: update if SOP Instance UID already exists (re-upload of same file)
   const existing = db.prepare('SELECT id FROM dicom_files WHERE sop_instance_uid = ?').get(metadata.sopInstanceUid);
 
@@ -16,15 +43,28 @@ export function registerDicomFile({ studyId, metadata, filePath, userId, reqId }
   if (existing) {
     db.prepare(`
       UPDATE dicom_files
-      SET series_instance_uid = ?, modality = ?, file_path = ?, file_name = ?, file_size = ?
+      SET series_instance_uid = ?, modality = ?, instance_number = ?, file_path = ?, file_name = ?, file_size = ?,
+          image_position_x = ?, image_position_y = ?, image_position_z = ?,
+          pixel_spacing_x = ?, pixel_spacing_y = ?, rows = ?, columns = ?
       WHERE id = ?
-    `).run(metadata.seriesInstanceUid, metadata.modality, filePath, metadata.fileName, metadata.fileSize, existing.id);
+    `).run(
+      metadata.seriesInstanceUid, metadata.modality, metadata.instanceNumber, filePath, metadata.fileName, metadata.fileSize,
+      imagePositionX, imagePositionY, imagePositionZ,
+      pixelSpacingX, pixelSpacingY, rows, columns,
+      existing.id
+    );
     result = { id: existing.id, updated: true };
   } else {
     const runResult = db.prepare(`
-      INSERT INTO dicom_files (study_id, series_instance_uid, sop_instance_uid, modality, file_path, file_name, file_size)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(studyId, metadata.seriesInstanceUid, metadata.sopInstanceUid, metadata.modality, filePath, metadata.fileName, metadata.fileSize);
+      INSERT INTO dicom_files (study_id, series_instance_uid, sop_instance_uid, modality, instance_number, file_path, file_name, file_size,
+          image_position_x, image_position_y, image_position_z, pixel_spacing_x, pixel_spacing_y, rows, columns)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      studyId, metadata.seriesInstanceUid, metadata.sopInstanceUid, metadata.modality, metadata.instanceNumber,
+      filePath, metadata.fileName, metadata.fileSize,
+      imagePositionX, imagePositionY, imagePositionZ,
+      pixelSpacingX, pixelSpacingY, rows, columns
+    );
     result = { id: runResult.lastInsertRowid, updated: false };
   }
 
@@ -43,10 +83,11 @@ export function getDicomFilesByStudy({ studyId, userId, reqId }) {
   const db = getDb();
 
   const files = db.prepare(`
-    SELECT id, series_instance_uid, sop_instance_uid, modality, file_name, file_size, created_at
+    SELECT id, series_instance_uid, sop_instance_uid, modality, instance_number, file_name, file_size, created_at,
+           image_position_x, image_position_y, image_position_z, pixel_spacing_x, pixel_spacing_y, rows, columns
     FROM dicom_files
     WHERE study_id = ?
-    ORDER BY modality, series_instance_uid, created_at
+    ORDER BY modality, series_instance_uid, instance_number, created_at
   `).all(studyId);
 
   auditLog(db, { reqId, userId, action: 'list_dicom_files', resourceType: 'dicom_file', metadata: { studyId, count: files.length } });
@@ -69,13 +110,13 @@ export function getDicomFile({ fileId, userId, reqId }) {
 
 /**
  * Generate HMAC-signed download URL valid for 15 minutes.
- * Format: /api/files/download/{fileId}?expires={expires}&sig={sig}
+ * Format: /api/files/public/download/{fileId}?expires={expires}&sig={sig}
  */
 export function generateSignedUrl({ fileId, reqId }) {
   const expires = Math.floor(Date.now() / 1000) + DOWNLOAD_EXPIRY_SECONDS;
   const payload = `${fileId}:${expires}`;
   const sig = createHmac('sha256', HMAC_SECRET).update(payload).digest('hex');
-  return `/api/files/download/${fileId}?expires=${expires}&sig=${sig}`;
+  return `/api/files/public/download/${fileId}?expires=${expires}&sig=${sig}`;
 }
 
 /**
@@ -116,9 +157,11 @@ export function getFilesByModality({ studyId, modality, userId, reqId }) {
   const db = getDb();
 
   const files = db.prepare(`
-    SELECT * FROM dicom_files
+    SELECT id, series_instance_uid, sop_instance_uid, modality, instance_number, file_name, file_size, created_at,
+           image_position_x, image_position_y, image_position_z, pixel_spacing_x, pixel_spacing_y, rows, columns
+    FROM dicom_files
     WHERE study_id = ? AND modality = ?
-    ORDER BY series_instance_uid, created_at
+    ORDER BY series_instance_uid, instance_number, created_at
   `).all(studyId, modality);
 
   return files;

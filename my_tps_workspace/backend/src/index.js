@@ -21,7 +21,15 @@ app.set('trust proxy', 1);
 
 // Global middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: [
+    process.env.FRONTEND_URL || 'http://localhost:5173',
+    'http://localhost:5179',
+    'http://localhost:5174',
+    'http://localhost:5175',
+    'http://localhost:5176',
+    'http://localhost:5177',
+    'http://localhost:5178',
+  ],
   credentials: true,
 }));
 
@@ -65,7 +73,7 @@ app.use('/api/auth/register', authLimiter);
 
 // Public HMAC-verified download (no auth — signature is the auth mechanism)
 // Must be mounted BEFORE auth-protected /api/files to take precedence
-app.use('/api/files', filesPublicRoutes);
+app.use('/api/files/public', filesPublicRoutes);
 // Auth-protected routes
 app.use('/api/files', authMiddleware, filesRoutes);
 app.use('/api/patients', authMiddleware, patientsRoutes);

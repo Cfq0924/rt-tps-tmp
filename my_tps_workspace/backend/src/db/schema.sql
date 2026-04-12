@@ -34,9 +34,18 @@ CREATE TABLE IF NOT EXISTS dicom_files (
   series_instance_uid TEXT NOT NULL,
   sop_instance_uid TEXT UNIQUE NOT NULL,
   modality TEXT,
+  instance_number INTEGER,
   file_path TEXT NOT NULL,
   file_name TEXT,
   file_size INTEGER,
+  -- Image positioning for coordinate transformation (DICOM tags 0020,0032 and 0028,0030)
+  image_position_x REAL,
+  image_position_y REAL,
+  image_position_z REAL,
+  pixel_spacing_x REAL,
+  pixel_spacing_y REAL,
+  rows INTEGER,
+  columns INTEGER,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

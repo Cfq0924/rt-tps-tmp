@@ -6,18 +6,21 @@ import {
   PanTool, ZoomIn, Contrast, Layers, ContentCut, Circle, Brush, Clear,
 } from '@mui/icons-material';
 
+// Tool names must match registered tool names in initCornerstone.js
 const TOOLS = [
-  { id: 'Pan', icon: <PanTool />, label: 'Pan (P)' },
-  { id: 'Zoom', icon: <ZoomIn />, label: 'Zoom (Z)' },
-  { id: 'WindowLevel', icon: <Contrast />, label: 'Window/Level (W)' },
-  { id: 'StackScroll', icon: <Layers />, label: 'Scroll (S)' },
+  { id: 'Pan', icon: <PanTool />, label: 'Pan' },
+  { id: 'Zoom', icon: <ZoomIn />, label: 'Zoom' },
+  { id: 'WindowLevel', icon: <Contrast />, label: 'Window/Level' },
+  { id: 'StackScroll', icon: <Layers />, label: 'Scroll' },
+  { id: 'Length', icon: null, label: 'Length' },
+  { id: 'Angle', icon: null, label: 'Angle' },
 ];
 
 const CONTOUR_TOOLS = [
-  { id: 'RectangleScissors', icon: <ContentCut />, label: 'Rectangle (R)' },
-  { id: 'CircleScissors', icon: <Circle />, label: 'Circle (C)' },
-  { id: 'Brush', icon: <Brush />, label: 'Brush (B)' },
-  { id: 'Eraser', icon: <Clear />, label: 'Eraser (E)' },
+  { id: 'RectangleScissors', icon: <ContentCut />, label: 'Rectangle' },
+  { id: 'CircleScissors', icon: <Circle />, label: 'Circle' },
+  { id: 'Brush', icon: <Brush />, label: 'Brush' },
+  { id: 'Eraser', icon: <Clear />, label: 'Eraser' },
 ];
 
 export default function Toolbar({ activeTool, onToolChange, onAutoSegment }) {

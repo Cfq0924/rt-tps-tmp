@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@cornerstonejs/core": "^4.20.0",
+    "@cornerstonejs/dicom-image-loader": "^4.20.4",
     "@cornerstonejs/tools": "^4.20.0",
     "@emotion/react": "^11.13.5",
     "@emotion/styled": "^11.13.5",

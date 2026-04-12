@@ -8,7 +8,11 @@ import {
   Checkbox,
   ListItemText,
   Divider,
+  Button,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
+import { CheckBoxOutlineBlank, CheckBox } from '@mui/icons-material';
 
 /**
  * StructurePanel - Displays ROI list with visibility toggles
@@ -18,12 +22,14 @@ import {
  * @param {Function} props.onToggle - Callback when structure visibility is toggled
  * @param {Function} props.onSelect - Callback when structure is selected
  * @param {number|null} props.selectedStructureId - Currently selected ROI number
+ * @param {Function} props.onToggleAll - Callback to toggle all structures visibility
  */
 export default function StructurePanel({
   structures,
   onToggle,
   onSelect,
   selectedStructureId,
+  onToggleAll,
 }) {
   if (!structures || structures.length === 0) {
     return (
@@ -35,21 +41,40 @@ export default function StructurePanel({
     );
   }
 
+  const allVisible = structures.every(s => s.visible);
+  const noneVisible = structures.every(s => !s.visible);
+
   return (
     <Box sx={{ width: '100%', overflow: 'auto' }}>
-      <Typography
-        variant="caption"
+      <Box
         sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
           px: 1,
           py: 0.5,
-          display: 'block',
-          color: 'text.secondary',
-          fontFamily: 'mono',
           borderBottom: '1px solid rgba(88,196,220,0.12)',
         }}
       >
-        STRUCTURES ({structures.length})
-      </Typography>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            fontFamily: 'mono',
+          }}
+        >
+          STRUCTURES ({structures.length})
+        </Typography>
+        <Tooltip title={allVisible ? 'Hide All' : 'Show All'}>
+          <IconButton
+            size="small"
+            onClick={onToggleAll}
+            sx={{ color: 'text.secondary', p: 0.5 }}
+          >
+            {allVisible ? <CheckBox fontSize="small" /> : <CheckBoxOutlineBlank fontSize="small" />}
+          </IconButton>
+        </Tooltip>
+      </Box>
       <List dense sx={{ py: 0 }}>
         {structures.map((structure) => (
           <ListItem

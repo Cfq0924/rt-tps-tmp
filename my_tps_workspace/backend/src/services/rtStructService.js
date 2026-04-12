@@ -20,11 +20,13 @@ export async function parseRTStruct(filePath) {
   const byteArray = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   const { dict } = DicomMessage.readFile(byteArray);
 
-  // Structure Set ROI Sequence (3006,0020) - contains ROI Number, Name
-  const roiSequence = extractROISequence(dict);
-
   // ROI Contour Sequence (3006,0039) - contains Contour Data with Referenced ROI Number
+  // Extract this FIRST so we can get colors for ROIs
   const contourSequence = extractContourSequence(dict);
+
+  // Structure Set ROI Sequence (3006,0020) - contains ROI Number, Name
+  // Pass contourSequence to get colors for each ROI
+  const roiSequence = extractROISequence(dict, contourSequence);
 
   return {
     roiSequence,
@@ -61,9 +63,10 @@ function getNumericValue(element) {
 /**
  * Extract ROI Sequence from Structure Set ROI Sequence tag
  * @param {Object} dict - Raw DICOM dictionary
+ * @param {Array} contourSequence - Contour sequence to extract colors from
  * @returns {Array} Array of ROI objects
  */
-function extractROISequence(dict) {
+function extractROISequence(dict, contourSequence = []) {
   const roiSequence = [];
 
   // Structure Set ROI Sequence (3006,0020)
@@ -73,14 +76,28 @@ function extractROISequence(dict) {
     return roiSequence;
   }
 
+  // Build a map of ROI number to display color from contour sequence
+  // Prefer non-white colors (some contours default to white)
+  const roiColorMap = {};
+  const isWhite = (c) => c && c.r === 255 && c.g === 255 && c.b === 255;
+  for (const contour of contourSequence) {
+    if (contour.referencedROINumber && contour.displayColor) {
+      const roi = contour.referencedROINumber;
+      const color = contour.displayColor;
+      // Only set if not already set, or if current is white and new is not white
+      if (!roiColorMap[roi] || (isWhite(roiColorMap[roi]) && !isWhite(color))) {
+        roiColorMap[roi] = color;
+      }
+    }
+  }
+
   for (const roiItem of structureSetROISequence.Value) {
     // Extract ROI Number (3006,0022)
     const roiNumber = getNumericValue(roiItem['30060022']);
     // Extract ROI Name (3006,0026)
     const roiName = getStringValue(roiItem['30060026']);
-    // ROI Display Color is in the contour sequence, not here
-    // Default to white, will be overridden by contour data
-    const displayColor = { r: 255, g: 255, b: 255 };
+    // Get color from contour sequence if available, otherwise default to white
+    const displayColor = roiColorMap[roiNumber] || { r: 255, g: 255, b: 255 };
 
     if (roiNumber !== null && roiName) {
       roiSequence.push({

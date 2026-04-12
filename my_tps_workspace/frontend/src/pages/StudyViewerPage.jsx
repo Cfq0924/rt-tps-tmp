@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, AppBar, Toolbar, Typography, IconButton, Button, CircularProgress,
@@ -10,13 +10,13 @@ import ToolbarComponent from '../components/Toolbar.jsx';
 import ViewerViewport from '../components/ViewerViewport.jsx';
 import StructurePanel from '../components/StructurePanel.jsx';
 import DosePanel from '../components/DosePanel.jsx';
+import RTStructureOverlay from '../components/RTStructureOverlay.jsx';
 import { initCornerstone } from '../initCornerstone.js';
 
 export default function StudyViewerPage() {
   const { studyId } = useParams();
   const navigate = useNavigate();
   const viewerRef = useRef(null);
-  const cornerstoneRef = useRef(null);
 
   const [study, setStudy] = useState(null);
   const [files, setFiles] = useState([]);
@@ -29,10 +29,17 @@ export default function StudyViewerPage() {
   const [csReady, setCsReady] = useState(false);
   const [aiAnchor, setAiAnchor] = useState(null);
 
+  // Image stack state
+  const [imageIds, setImageIds] = useState([]);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+
   // RT Structure state
   const [structures, setStructures] = useState([]);
   const [selectedStructureId, setSelectedStructureId] = useState(null);
   const [structureVisibility, setStructureVisibility] = useState({});
+  const [contours, setContours] = useState([]); // All contours from RTSTRUCT
+  const [currentContours, setCurrentContours] = useState([]); // Contours for current slice
+  const [rtStructFileId, setRtStructFileId] = useState(null);
 
   // RT Dose state
   const [doseData, setDoseData] = useState(null);
@@ -44,7 +51,9 @@ export default function StudyViewerPage() {
   const [rightTab, setRightTab] = useState(0);
 
   useEffect(() => {
-    initCornerstone().then(() => setCsReady(true)).catch(err => setError('Failed to initialize Cornerstone'));
+    initCornerstone()
+      .then(() => setCsReady(true))
+      .catch(err => setError('Failed to initialize Cornerstone'));
   }, []);
 
   useEffect(() => {
@@ -64,6 +73,9 @@ export default function StudyViewerPage() {
       if (mods.includes('CT')) setActiveModality('CT');
       else if (mods.length) setActiveModality(mods[0]);
 
+      // Build imageIds for CT files
+      buildImageIds(data.study.files || []);
+
       // Fetch RTSTRUCT data
       const rtStructFile = data.study.files?.find(f => f.modality === 'RTSTRUCT');
       if (rtStructFile) {
@@ -82,13 +94,59 @@ export default function StudyViewerPage() {
     }
   }
 
+  /**
+   * Build Cornerstone imageIds for CT files
+   * Uses direct HTTP URLs with wadouri scheme
+   */
+  async function buildImageIds(allFiles) {
+    const ctFiles = allFiles
+      .filter(f => f.modality === 'CT')
+      .sort((a, b) => {
+        // Sort by instance_number if available, otherwise fallback to sop_instance_uid
+        const aNum = a.instance_number ?? parseInt(a.sop_instance_uid?.split('.').pop() || '0', 10);
+        const bNum = b.instance_number ?? parseInt(b.sop_instance_uid?.split('.').pop() || '0', 10);
+        return aNum - bNum;
+      });
+
+    if (ctFiles.length === 0) return;
+
+    const ids = [];
+    for (const file of ctFiles) {
+      try {
+        const url = await getSignedUrl(file.id);
+        // Use relative URL - loadFileRequest will prepend origin
+        ids.push(`wadouri:${url}`);
+      } catch (err) {
+        console.error(`Failed to get URL for file ${file.id}:`, err);
+      }
+    }
+
+    console.log('[StudyViewer] Built', ids.length, 'imageIds');
+    setImageIds(ids);
+
+    // Auto-select first CT file
+    if (!selectedFileId && ctFiles.length > 0) {
+      setSelectedFileId(ctFiles[0].id);
+    }
+  }
+
+  async function getSignedUrl(fileId) {
+    const res = await fetch(`/api/files/signed-url/${fileId}`, { credentials: 'include' });
+    if (!res.ok) throw new Error('Failed to get signed URL');
+    const data = await res.json();
+    // wadouri scheme requires absolute URL with protocol and host
+    // Point directly to backend (port 3001) since Vite proxy may not handle query strings correctly
+    const baseUrl = `http://localhost:3001`;
+    return `${baseUrl}${data.url}`;
+  }
+
   async function fetchRTSTRUCT(fileId) {
     try {
+      setRtStructFileId(fileId);
       const res = await fetch(`/api/rtstruct/${fileId}`, { credentials: 'include' });
       if (!res.ok) return;
       const data = await res.json();
       if (data.roiSequence) {
-        // Initialize structures with visibility
         const initialStructures = data.roiSequence.map(roi => ({
           ...roi,
           visible: true,
@@ -100,6 +158,10 @@ export default function StudyViewerPage() {
         if (initialStructures.length > 0) {
           setSelectedStructureId(initialStructures[0].roiNumber);
         }
+      }
+      // Store contour sequence for per-slice rendering
+      if (data.contourSequence) {
+        setContours(data.contourSequence);
       }
     } catch (err) {
       console.error('Failed to fetch RTSTRUCT:', err);
@@ -117,7 +179,87 @@ export default function StudyViewerPage() {
     }
   }
 
-  const filesForModality = files.filter(f => f.modality === activeModality);
+  const filesForModality = useMemo(
+    () => files.filter(f => f.modality === activeModality),
+    [files, activeModality]
+  );
+
+  // Get current imageId for CT
+  const currentImageId = useMemo(() => {
+    if (activeModality !== 'CT' || imageIds.length === 0 || !selectedFileId) return null;
+    const idx = filesForModality.findIndex(f => f.id === selectedFileId);
+    return idx >= 0 ? imageIds[idx] : null;
+  }, [activeModality, imageIds, selectedFileId, filesForModality]);
+
+  // Get current CT file for SOPInstanceUID
+  const currentCTFile = useMemo(() => {
+    if (activeModality !== 'CT' || !selectedFileId) return null;
+    return filesForModality.find(f => f.id === selectedFileId) || null;
+  }, [activeModality, selectedFileId, filesForModality]);
+
+  // Filter contours for current slice when slice changes
+  useEffect(() => {
+    if (!currentImageIndex && currentImageIndex !== 0) {
+      setCurrentContours([]);
+      return;
+    }
+
+    if (contours.length === 0) {
+      setCurrentContours([]);
+      return;
+    }
+
+    // Get the currently displayed CT slice file
+    // filesForModality is sorted by instance_number, so index = currentImageIndex
+    const currentFile = filesForModality[currentImageIndex];
+    if (!currentFile?.sop_instance_uid) {
+      setCurrentContours([]);
+      return;
+    }
+
+    const currentSOPInstanceUID = currentFile.sop_instance_uid;
+    const visibleROINumbers = new Set(
+      Object.entries(structureVisibility)
+        .filter(([_, visible]) => visible)
+        .map(([roiNumber]) => parseInt(roiNumber, 10))
+    );
+
+    // Debug logging - log unique SOPInstanceUIDs once
+    if (!window._contourUidLogged) {
+      window._contourUidLogged = true;
+      const uniqueUIDs = [...new Set(contours.map(c => c.referencedSOPInstanceUID))];
+      console.log('[StudyViewer] All unique SOPInstanceUIDs in contours:', uniqueUIDs.slice(0, 10));
+      console.log('[StudyViewer] Current SOPInstanceUID:', currentSOPInstanceUID);
+    }
+
+    // Filter contours using referencedSOPInstanceUID - direct match, no Z calculation
+    const filtered = contours.filter(c => {
+      // First check if ROI is visible
+      if (!visibleROINumbers.has(c.referencedROINumber)) return false;
+
+      // Match by SOPInstanceUID - this is the correct way to link contours to CT slices
+      if (c.referencedSOPInstanceUID !== currentSOPInstanceUID) return false;
+
+      // Ensure contour has valid data
+      const contourData = c.contourData;
+      if (!contourData || contourData.length < 3) return false;
+
+      return true;
+    });
+
+    console.log('[StudyViewer] Filtering: idx=', currentImageIndex, 'SOPUID=', currentSOPInstanceUID?.slice(0, 20), '...', 'matched=', filtered.length, 'contours');
+    setCurrentContours(filtered);
+  }, [currentImageIndex, contours, structureVisibility, filesForModality]);
+
+  // Auto-update currentImageIndex when selectedFileId changes
+  useEffect(() => {
+    if (selectedFileId && filesForModality.length > 0) {
+      const idx = filesForModality.findIndex(f => f.id === selectedFileId);
+      if (idx >= 0) {
+        setCurrentImageIndex(idx);
+      }
+    }
+  }, [selectedFileId, filesForModality]);
 
   async function handleAutoSegment() {
     const rtStructFiles = files.filter(f => f.modality === 'RTSTRUCT');
@@ -147,12 +289,6 @@ export default function StudyViewerPage() {
     }
   }
 
-  async function getSignedUrl(fileId) {
-    const res = await fetch(`/api/files/signed-url/${fileId}`, { credentials: 'include' });
-    const data = await res.json();
-    return data.url;
-  }
-
   function handleToggleStructure(roiNumber) {
     setStructureVisibility(prev => {
       const newVisibility = { ...prev, [roiNumber]: !prev[roiNumber] };
@@ -165,6 +301,19 @@ export default function StudyViewerPage() {
 
   function handleSelectStructure(roiNumber) {
     setSelectedStructureId(roiNumber);
+  }
+
+  function handleToggleAllStructures() {
+    const allVisible = structures.every(s => s.visible);
+    const newVisible = !allVisible;
+    setStructureVisibility(
+      structures.reduce((acc, s) => ({ ...acc, [s.roiNumber]: newVisible }), {})
+    );
+    setStructures(prev => prev.map(s => ({ ...s, visible: newVisible })));
+  }
+
+  function handleFileSelect(fileId) {
+    setSelectedFileId(fileId);
   }
 
   if (loading) {
@@ -223,50 +372,52 @@ export default function StudyViewerPage() {
       </AppBar>
 
       <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* File list sidebar */}
-        <Box
-          sx={{
-            width: 220,
-            borderRight: '1px solid rgba(88,196,220,0.12)',
-            background: 'background.paper',
-            overflow: 'auto',
-          }}
-        >
-          <List dense>
-            {filesForModality.map(file => (
-              <ListItem key={file.id} disablePadding>
-                <ListItemButton
-                  selected={selectedFileId === file.id}
-                  onClick={() => setSelectedFileId(file.id)}
-                  sx={{ py: 0.5 }}
-                >
-                  <ListItemText
-                    primary={
-                      <Typography sx={{ fontSize: '0.75rem', fontFamily: 'mono' }}>
-                        {file.sop_instance_uid?.slice(0, 12)}…
-                      </Typography>
-                    }
-                    secondary={
-                      <Box sx={{ display: 'flex', gap: 0.5, mt: 0.25 }}>
-                        <Chip label={file.modality} size="small" sx={{ height: 16, fontSize: '0.65rem', fontFamily: 'mono' }} />
-                        {file.file_size && (
-                          <Typography sx={{ fontSize: '0.65rem', color: 'text.secondary' }}>
-                            {(file.file_size / 1024 / 1024).toFixed(1)}MB
-                          </Typography>
-                        )}
-                      </Box>
-                    }
-                  />
-                </ListItemButton>
-              </ListItem>
-            ))}
-            {filesForModality.length === 0 && (
-              <ListItem>
-                <ListItemText secondary="No files" sx={{ color: 'text.secondary', fontSize: '0.75rem' }} />
-              </ListItem>
-            )}
-          </List>
-        </Box>
+        {/* File list sidebar - only show if not CT */}
+        {activeModality !== 'CT' && (
+          <Box
+            sx={{
+              width: 220,
+              borderRight: '1px solid rgba(88,196,220,0.12)',
+              background: 'background.paper',
+              overflow: 'auto',
+            }}
+          >
+            <List dense>
+              {filesForModality.map(file => (
+                <ListItem key={file.id} disablePadding>
+                  <ListItemButton
+                    selected={selectedFileId === file.id}
+                    onClick={() => handleFileSelect(file.id)}
+                    sx={{ py: 0.5 }}
+                  >
+                    <ListItemText
+                      primary={
+                        <Typography sx={{ fontSize: '0.75rem', fontFamily: 'mono' }}>
+                          {file.sop_instance_uid?.slice(0, 12)}…
+                        </Typography>
+                      }
+                      secondary={
+                        <Box sx={{ display: 'flex', gap: 0.5, mt: 0.25 }}>
+                          <Chip label={file.modality} size="small" sx={{ height: 16, fontSize: '0.65rem', fontFamily: 'mono' }} />
+                          {file.file_size && (
+                            <Typography sx={{ fontSize: '0.65rem', color: 'text.secondary' }}>
+                              {(file.file_size / 1024 / 1024).toFixed(1)}MB
+                            </Typography>
+                          )}
+                        </Box>
+                      }
+                    />
+                  </ListItemButton>
+                </ListItem>
+              ))}
+              {filesForModality.length === 0 && (
+                <ListItem>
+                  <ListItemText secondary="No files" sx={{ color: 'text.secondary', fontSize: '0.75rem' }} />
+                </ListItem>
+              )}
+            </List>
+          </Box>
+        )}
 
         {/* Main viewer */}
         <Box sx={{ flex: 1, position: 'relative', background: '#07111f' }}>
@@ -284,16 +435,54 @@ export default function StudyViewerPage() {
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
               <CircularProgress />
             </Box>
+          ) : activeModality === 'CT' && imageIds.length > 0 ? (
+            <ViewerViewport
+              imageId={currentImageId}
+              activeTool={activeTool}
+              imageIds={imageIds}
+              currentImageIndex={currentImageIndex}
+              onImageIndexChange={setCurrentImageIndex}
+              contours={currentContours}
+              structureOverlayVisible={true}
+              activeModality={activeModality}
+              imagePosition={currentCTFile ? {
+                x: currentCTFile.image_position_x || 0,
+                y: currentCTFile.image_position_y || 0,
+                z: currentCTFile.image_position_z || 0,
+              } : null}
+              pixelSpacing={currentCTFile ? {
+                x: currentCTFile.pixel_spacing_x || 1,
+                y: currentCTFile.pixel_spacing_y || 1,
+              } : null}
+            />
           ) : selectedFileId ? (
             <ViewerViewport
-              elementRef={viewerRef}
-              imageId={`dicomfile:${selectedFileId}`}
+              imageId={`wadouri:/api/files/signed-url/${selectedFileId}`}
               activeTool={activeTool}
             />
           ) : (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
               <Typography color="text.secondary" variant="body2">
                 Select a file from the sidebar to view
+              </Typography>
+            </Box>
+          )}
+
+          {/* Image info overlay */}
+          {activeModality === 'CT' && imageIds.length > 0 && (
+            <Box
+              sx={{
+                position: 'absolute',
+                bottom: 8,
+                left: 8,
+                background: 'rgba(0,0,0,0.6)',
+                px: 1,
+                py: 0.5,
+                borderRadius: 0.5,
+              }}
+            >
+              <Typography variant="caption" sx={{ fontFamily: 'mono', color: '#58c4dc' }}>
+                Image: {currentImageIndex + 1} / {imageIds.length}
               </Typography>
             </Box>
           )}
@@ -329,6 +518,7 @@ export default function StudyViewerPage() {
                 structures={structures}
                 onToggle={handleToggleStructure}
                 onSelect={handleSelectStructure}
+                onToggleAll={handleToggleAllStructures}
                 selectedStructureId={selectedStructureId}
               />
             )}

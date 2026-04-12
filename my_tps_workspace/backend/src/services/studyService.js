@@ -51,10 +51,10 @@ export function getStudy({ id, userId, reqId }) {
   }
 
   const files = db.prepare(`
-    SELECT id, series_instance_uid, sop_instance_uid, modality, file_name, file_size, created_at
+    SELECT id, series_instance_uid, sop_instance_uid, modality, instance_number, file_name, file_size, created_at
     FROM dicom_files
     WHERE study_id = ?
-    ORDER BY modality, created_at
+    ORDER BY modality, instance_number
   `).all(id);
 
   auditLog(db, { reqId, userId, action: 'get_study', resourceType: 'study', resourceId: id });
