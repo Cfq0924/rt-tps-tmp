@@ -1,5 +1,5 @@
 import { Box, Typography, CircularProgress } from '@mui/material';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import * as cornerstone from '@cornerstonejs/core';
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import { initCornerstone, addViewportToToolGroup, DEFAULT_TOOL_GROUP_ID } from '../initCornerstone.js';
@@ -22,6 +22,7 @@ export default function ViewerViewport({
   imagePosition,
   pixelSpacing,
   frameOfReferenceUID,
+  onStructureVisibilityChange,  // callback(roiNumber, visible) for structure toggle
 }) {
   const containerRef = useRef(null);
   const renderingEngineRef = useRef(null);
@@ -49,12 +50,19 @@ export default function ViewerViewport({
 
   // Use cornerstone3D native contour segmentation
   const viewportForSeg = viewportReady ? viewportRef.current : null;
-  useRTContourSegmentation({
+  const { setSegmentVisibility } = useRTContourSegmentation({
     viewport: viewportForSeg,
     roiSequence: structures,
     contourSequence: contours,
     visibility: visibilityMapRef.current,
   });
+
+  // Expose setSegmentVisibility to parent via callback
+  useEffect(() => {
+    if (onStructureVisibilityChange) {
+      onStructureVisibilityChange(setSegmentVisibility);
+    }
+  }, [onStructureVisibilityChange, setSegmentVisibility]);
 
   // Keep activeTool ref updated
   useEffect(() => {

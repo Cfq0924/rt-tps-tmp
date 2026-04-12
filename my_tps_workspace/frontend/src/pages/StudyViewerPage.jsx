@@ -39,6 +39,7 @@ export default function StudyViewerPage() {
   const [contours, setContours] = useState([]); // All contours from RTSTRUCT
   const [currentContours, setCurrentContours] = useState([]); // Contours for current slice
   const [rtStructFileId, setRtStructFileId] = useState(null);
+  const [segmentVisibilityToggle, setSegmentVisibilityToggle] = useState(null); // from useRTContourSegmentation hook
 
   // RT Dose state
   const [doseData, setDoseData] = useState(null);
@@ -273,13 +274,18 @@ export default function StudyViewerPage() {
   }
 
   function handleToggleStructure(roiNumber) {
+    const newVisible = !structureVisibility[roiNumber];
     setStructureVisibility(prev => {
-      const newVisibility = { ...prev, [roiNumber]: !prev[roiNumber] };
+      const newVisibility = { ...prev, [roiNumber]: newVisible };
       setStructures(prev => prev.map(s =>
         s.roiNumber === roiNumber ? { ...s, visible: newVisibility[roiNumber] } : s
       ));
       return newVisibility;
     });
+    // Also toggle the actual contour rendering
+    if (segmentVisibilityToggle) {
+      segmentVisibilityToggle(roiNumber, newVisible);
+    }
   }
 
   function handleSelectStructure(roiNumber) {
@@ -439,6 +445,7 @@ export default function StudyViewerPage() {
                 y: currentCTFile.pixel_spacing_y || 1,
               } : null}
               frameOfReferenceUID={currentCTFile?.frame_of_reference_uid}
+              onStructureVisibilityChange={setSegmentVisibilityToggle}
             />
           ) : selectedFileId ? (
             <ViewerViewport
