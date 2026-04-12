@@ -38,3 +38,6 @@ coverage/
 *.tmp
 *.temp
 .cache/
+
+# Knowledge base (personal notes, not for commit)
+WISSEN.md

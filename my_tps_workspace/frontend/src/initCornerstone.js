@@ -47,32 +47,11 @@ export async function initCornerstone() {
 
   async function doInit() {
     try {
-      console.log('[Init] Starting initialization...');
-
-      // Expose cornerstone globally (required for dicomImageLoader)
       window.cornerstone = cornerstone;
 
-      // Step 1: Initialize DICOM image loader FIRST (before cornerstone.init)
-      console.log('[Init] Calling dicomImageLoader.init()...');
-      try {
-        dicomImageLoader.init();
-        console.log('[Init] dicomImageLoader.init() complete');
-      } catch (err) {
-        console.error('[Init] dicomImageLoader.init() FAILED:', err);
-      }
-      // Manually register wadouri loader using the direct wadouri.loadImage
-      // This ensures the loader is registered even with Vite pre-bundling
-      try {
-        cornerstone.imageLoader.registerImageLoader('wadouri', wadouri.loadImage);
-      } catch (e) {
-        // Registration may fail if already registered, which is fine
-      }
-
-      // Step 2: Initialize cornerstone core
       await cornerstone.init();
-      console.log('[Init] cornerstone.init() complete');
+      dicomImageLoader.init();
 
-      // Step 3: Register volume loaders
       cornerstone.volumeLoader.registerUnknownVolumeLoader(
         cornerstoneStreamingImageVolumeLoader
       );
@@ -84,21 +63,15 @@ export async function initCornerstone() {
         'cornerstoneStreamingDynamicImageVolume',
         cornerstoneStreamingDynamicImageVolumeLoader
       );
-      console.log('[Init] volumeLoader.registerVolumeLoader() complete');
 
-      // Step 4: Add metadata providers (for CT pixel spacing etc.)
       const { calibratedPixelSpacingMetadataProvider } = cornerstone.utilities;
       cornerstone.metaData.addProvider(
         calibratedPixelSpacingMetadataProvider.get.bind(calibratedPixelSpacingMetadataProvider),
         11000
       );
-      console.log('[Init] metadata providers added');
 
-      // Step 5: Initialize cornerstone tools
       await cornerstoneTools.init();
-      console.log('[Init] cornerstoneTools.init() complete');
 
-      // Step 5: Register tools
       cornerstoneTools.addTool(PanTool);
       cornerstoneTools.addTool(ZoomTool);
       cornerstoneTools.addTool(WindowLevelTool);
@@ -106,22 +79,18 @@ export async function initCornerstone() {
       cornerstoneTools.addTool(LengthTool);
       cornerstoneTools.addTool(AngleTool);
       cornerstoneTools.addTool(ProbeTool);
-      // Segmentation tools
       cornerstoneTools.addTool(RectangleScissorsTool);
       cornerstoneTools.addTool(CircleScissorsTool);
       cornerstoneTools.addTool(BrushTool);
       cornerstoneTools.addTool(EraserTool);
-      console.log('[Init] Tools registered');
 
-      // Step 6: Create and configure default tool group
       createDefaultToolGroup();
 
       isInitialized = true;
-      console.log('[Init] Cornerstone3D initialized successfully');
       return { cornerstone, cornerstoneTools };
     } catch (err) {
       console.error('[Init] Failed to initialize Cornerstone:', err);
-      initPromise = null; // Reset so retry is possible
+      initPromise = null;
       throw err;
     }
   }

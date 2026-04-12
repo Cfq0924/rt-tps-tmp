@@ -124,3 +124,14 @@ Key decisions:
 - **Color:** Dark navy base (#07111f), teal primary (#58c4dc), amber dose accent (#f6c177)
 - **Component library:** MUI (Material UI)
 - **Motion:** Minimal-functional — only state transitions, no decorative animations
+
+## Knowledge Base
+
+**IMPORTANT:** Before working on complex features, check `my_tps_workspace/WISSEN.md` for documented solutions to difficult problems. This file contains accumulated knowledge about:
+
+- RT Structure/Dose rendering with cornerstone3D
+- Cornerstone3D initialization and metadata management
+- DICOM coordinate system and image loading patterns
+- Common errors and their root causes
+
+When you solve a non-trivial problem, document it in WISSEN.md for future reference.

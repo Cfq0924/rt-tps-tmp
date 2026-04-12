@@ -10,7 +10,6 @@ import ToolbarComponent from '../components/Toolbar.jsx';
 import ViewerViewport from '../components/ViewerViewport.jsx';
 import StructurePanel from '../components/StructurePanel.jsx';
 import DosePanel from '../components/DosePanel.jsx';
-import RTStructureOverlay from '../components/RTStructureOverlay.jsx';
 import { initCornerstone } from '../initCornerstone.js';
 
 export default function StudyViewerPage() {
@@ -121,7 +120,6 @@ export default function StudyViewerPage() {
       }
     }
 
-    console.log('[StudyViewer] Built', ids.length, 'imageIds');
     setImageIds(ids);
 
     // Auto-select first CT file
@@ -224,30 +222,15 @@ export default function StudyViewerPage() {
         .map(([roiNumber]) => parseInt(roiNumber, 10))
     );
 
-    // Debug logging - log unique SOPInstanceUIDs once
-    if (!window._contourUidLogged) {
-      window._contourUidLogged = true;
-      const uniqueUIDs = [...new Set(contours.map(c => c.referencedSOPInstanceUID))];
-      console.log('[StudyViewer] All unique SOPInstanceUIDs in contours:', uniqueUIDs.slice(0, 10));
-      console.log('[StudyViewer] Current SOPInstanceUID:', currentSOPInstanceUID);
-    }
-
-    // Filter contours using referencedSOPInstanceUID - direct match, no Z calculation
+    // Filter contours using referencedSOPInstanceUID - direct match
     const filtered = contours.filter(c => {
-      // First check if ROI is visible
       if (!visibleROINumbers.has(c.referencedROINumber)) return false;
-
-      // Match by SOPInstanceUID - this is the correct way to link contours to CT slices
       if (c.referencedSOPInstanceUID !== currentSOPInstanceUID) return false;
-
-      // Ensure contour has valid data
       const contourData = c.contourData;
       if (!contourData || contourData.length < 3) return false;
-
       return true;
     });
 
-    console.log('[StudyViewer] Filtering: idx=', currentImageIndex, 'SOPUID=', currentSOPInstanceUID?.slice(0, 20), '...', 'matched=', filtered.length, 'contours');
     setCurrentContours(filtered);
   }, [currentImageIndex, contours, structureVisibility, filesForModality]);
 
@@ -442,7 +425,8 @@ export default function StudyViewerPage() {
               imageIds={imageIds}
               currentImageIndex={currentImageIndex}
               onImageIndexChange={setCurrentImageIndex}
-              contours={currentContours}
+              structures={structures}           // roiSequence for RT Structure
+              contours={contours}             // contourSequence for RT Structure
               structureOverlayVisible={true}
               activeModality={activeModality}
               imagePosition={currentCTFile ? {
@@ -454,6 +438,7 @@ export default function StudyViewerPage() {
                 x: currentCTFile.pixel_spacing_x || 1,
                 y: currentCTFile.pixel_spacing_y || 1,
               } : null}
+              frameOfReferenceUID={currentCTFile?.frame_of_reference_uid}
             />
           ) : selectedFileId ? (
             <ViewerViewport

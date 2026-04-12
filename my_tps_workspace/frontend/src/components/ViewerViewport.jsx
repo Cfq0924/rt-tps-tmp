@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as cornerstone from '@cornerstonejs/core';
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import { initCornerstone, addViewportToToolGroup, DEFAULT_TOOL_GROUP_ID } from '../initCornerstone.js';
-import RTStructureOverlay from './RTStructureOverlay.jsx';
+import { useRTContourSegmentation } from '../hooks/useRTContourSegmentation.js';
 
 const VIEWPORT_ELEMENT_ID = 'dicom-viewport';
 const RENDERING_ENGINE_ID = 'myTPSRenderingEngine';
@@ -15,11 +15,13 @@ export default function ViewerViewport({
   imageIds = [],
   currentImageIndex = 0,
   onImageIndexChange,
-  contours = [],
+  structures = [],        // roiSequence from RTSTRUCT
+  contours = [],          // contourSequence from RTSTRUCT
   structureOverlayVisible = true,
   activeModality = 'CT',
   imagePosition,
   pixelSpacing,
+  frameOfReferenceUID,
 }) {
   const containerRef = useRef(null);
   const renderingEngineRef = useRef(null);
@@ -34,6 +36,25 @@ export default function ViewerViewport({
   const lastSetIndexRef = useRef(currentImageIndex);
   // Track what triggered the last index change to avoid feedback loops
   const scrollSourceRef = useRef('init'); // 'init' | 'parent' | 'internal'
+
+  // Build visibility map from structures array
+  const visibilityMapRef = useRef({});
+  useEffect(() => {
+    const map = {};
+    structures.forEach(s => {
+      map[s.roiNumber] = s.visible !== false;
+    });
+    visibilityMapRef.current = map;
+  }, [structures]);
+
+  // Use cornerstone3D native contour segmentation
+  const viewportForSeg = viewportReady ? viewportRef.current : null;
+  useRTContourSegmentation({
+    viewport: viewportForSeg,
+    roiSequence: structures,
+    contourSequence: contours,
+    visibility: visibilityMapRef.current,
+  });
 
   // Keep activeTool ref updated
   useEffect(() => {
@@ -76,9 +97,6 @@ export default function ViewerViewport({
     // Activate the selected tool
     if (toolToActivate && toolGroup.hasTool(toolToActivate)) {
       toolGroup.setToolActive(toolToActivate, { bindings: [{ mouseButton: 0 }] });
-      console.log(`[Viewer] Activated tool: ${toolToActivate}`);
-    } else if (activeTool) {
-      console.log(`[Viewer] Tool ${toolToActivate} not found in toolGroup`);
     }
   }, [activeTool, isReady]);
 
@@ -172,11 +190,7 @@ export default function ViewerViewport({
         }
 
         setStatus(`setStack with ${imageIds.length} images...`);
-
-        console.log('[Viewer] Calling setStack with', imageIds.length, 'images, index:', currentImageIndex);
         await vp.setStack(imageIds, currentImageIndex);
-        console.log('[Viewer] setStack completed!');
-
         setStatus('Rendering...');
         vp.render();
         setStatus('Render complete');
@@ -217,7 +231,6 @@ export default function ViewerViewport({
     if (currentImageIndex === lastSetIndexRef.current) return;
     if (scrollSourceRef.current !== 'parent') return;
 
-    console.log('[Viewer] Programmatic index change to:', currentImageIndex);
     lastSetIndexRef.current = currentImageIndex;
 
     vp.setStack(imageIds, currentImageIndex).then(() => {
@@ -237,7 +250,6 @@ export default function ViewerViewport({
       if (vp && onImageIndexChange) {
         const currentIdx = vp.getCurrentImageIdIndex();
         if (lastKnownIndex !== -1 && currentIdx !== lastKnownIndex) {
-          console.log('[Viewer] Slice changed internally to:', currentIdx);
           scrollSourceRef.current = 'internal';
           onImageIndexChange(currentIdx);
         }
@@ -272,19 +284,7 @@ export default function ViewerViewport({
     <Box ref={containerRef} sx={{ width: '100%', height: '100%', position: 'relative', background: '#07111f' }}>
       <div id={VIEWPORT_ELEMENT_ID} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }} />
 
-      {/* RT Structure Overlay - only render when viewport is ready */}
-      {viewportReady && (
-        <RTStructureOverlay
-          element={document.getElementById(VIEWPORT_ELEMENT_ID)}
-          viewport={viewportRef.current}
-          contours={contours}
-          visible={structureOverlayVisible && activeModality === 'CT'}
-          currentImageIndex={currentImageIndex}
-          imagePosition={imagePosition}
-          pixelSpacing={pixelSpacing}
-        />
-      )}
-
+      {/* RT Structure Overlay - Cornerstone native segmentation handles rendering */}
       {status && (
         <Box sx={{ position: 'absolute', top: 8, left: 8, right: 8, background: 'rgba(0,0,0,0.7)', p: 1, borderRadius: 0.5 }}>
           <Typography variant="caption" sx={{ fontFamily: 'mono', fontSize: '0.65rem', color: '#58c4dc', wordBreak: 'break-all' }}>
