@@ -39,7 +39,12 @@ export default function StudyViewerPage() {
   const [contours, setContours] = useState([]); // All contours from RTSTRUCT
   const [currentContours, setCurrentContours] = useState([]); // Contours for current slice
   const [rtStructFileId, setRtStructFileId] = useState(null);
-  const [segmentVisibilityToggle, setSegmentVisibilityToggle] = useState(null); // from useRTContourSegmentation hook
+  const segmentVisibilityToggleRef = useRef(null); // stores the actual setSegmentVisibility function from hook
+
+  // Callback to register the setSegmentVisibility function from the hook
+  const handleSegmentVisibilityRef = useCallback((toggleFn) => {
+    segmentVisibilityToggleRef.current = toggleFn;
+  }, []);
 
   // RT Dose state
   const [doseData, setDoseData] = useState(null);
@@ -283,8 +288,8 @@ export default function StudyViewerPage() {
       return newVisibility;
     });
     // Also toggle the actual contour rendering
-    if (segmentVisibilityToggle) {
-      segmentVisibilityToggle(roiNumber, newVisible);
+    if (segmentVisibilityToggleRef.current) {
+      segmentVisibilityToggleRef.current(roiNumber, newVisible);
     }
   }
 
@@ -299,6 +304,12 @@ export default function StudyViewerPage() {
       structures.reduce((acc, s) => ({ ...acc, [s.roiNumber]: newVisible }), {})
     );
     setStructures(prev => prev.map(s => ({ ...s, visible: newVisible })));
+    // Also toggle all contours in cornerstone segmentation
+    if (segmentVisibilityToggleRef.current) {
+      structures.forEach(s => {
+        segmentVisibilityToggleRef.current(s.roiNumber, newVisible);
+      });
+    }
   }
 
   function handleFileSelect(fileId) {
@@ -445,7 +456,7 @@ export default function StudyViewerPage() {
                 y: currentCTFile.pixel_spacing_y || 1,
               } : null}
               frameOfReferenceUID={currentCTFile?.frame_of_reference_uid}
-              onStructureVisibilityChange={setSegmentVisibilityToggle}
+              onSegmentVisibilityRef={handleSegmentVisibilityRef}
             />
           ) : selectedFileId ? (
             <ViewerViewport

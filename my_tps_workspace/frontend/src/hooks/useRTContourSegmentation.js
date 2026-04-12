@@ -207,7 +207,7 @@ export function useRTContourSegmentation({
   }, [viewport, roiSequence, contourSequence, visibility, createGeometries, addSegmentationToViewport, preloadAllImages]);
 
   /**
-   * Toggle visibility for a segment
+   * Toggle visibility for a segment (per-segment visibility within the contour representation)
    */
   const setSegmentVisibility = useCallback((segmentIndex, visible) => {
     if (!viewport) return;
@@ -215,12 +215,13 @@ export function useRTContourSegmentation({
     try {
       const { SegmentationRepresentations } = cornerstoneTools.Enums;
 
-      cornerstoneTools.segmentation.config.setSegmentationRepresentationVisibility({
-        viewportId: viewport.id,
-        segmentationId: SEGMENTATION_ID,
-        type: SegmentationRepresentations.Contour,
-        visible,
-      });
+      // Use setSegmentIndexVisibility for per-segment visibility
+      cornerstoneTools.segmentation.config.visibility.setSegmentIndexVisibility(
+        viewport.id,
+        { segmentationId: SEGMENTATION_ID, type: SegmentationRepresentations.Contour },
+        segmentIndex,
+        visible
+      );
 
       viewport.render();
     } catch (err) {

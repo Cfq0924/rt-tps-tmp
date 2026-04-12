@@ -22,7 +22,7 @@ export default function ViewerViewport({
   imagePosition,
   pixelSpacing,
   frameOfReferenceUID,
-  onStructureVisibilityChange,  // callback(roiNumber, visible) for structure toggle
+  onSegmentVisibilityRef,  // callback to register setSegmentVisibility function
 }) {
   const containerRef = useRef(null);
   const renderingEngineRef = useRef(null);
@@ -59,10 +59,10 @@ export default function ViewerViewport({
 
   // Expose setSegmentVisibility to parent via callback
   useEffect(() => {
-    if (onStructureVisibilityChange) {
-      onStructureVisibilityChange(setSegmentVisibility);
+    if (onSegmentVisibilityRef) {
+      onSegmentVisibilityRef(setSegmentVisibility);
     }
-  }, [onStructureVisibilityChange, setSegmentVisibility]);
+  }, [onSegmentVisibilityRef, setSegmentVisibility]);
 
   // Keep activeTool ref updated
   useEffect(() => {
