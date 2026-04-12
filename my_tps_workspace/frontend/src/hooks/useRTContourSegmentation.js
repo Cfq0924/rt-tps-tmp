@@ -210,6 +210,8 @@ export function useRTContourSegmentation({
    * Toggle visibility for a segment
    */
   const setSegmentVisibility = useCallback((segmentIndex, visible) => {
+    if (!viewport) return;
+
     try {
       const { SegmentationRepresentations } = cornerstoneTools.Enums;
 
@@ -220,9 +222,7 @@ export function useRTContourSegmentation({
         visible,
       });
 
-      if (viewport) {
-        viewport.render();
-      }
+      viewport.render();
     } catch (err) {
       console.error('[RTContourSegmentation] Failed to set visibility:', err);
     }
