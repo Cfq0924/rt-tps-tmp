@@ -132,26 +132,31 @@ export async function validateDicomBatch(req, res, next) {
   const filesWithMetadata = [];
   const errors = [];
 
-  // Process all files in parallel
-  await Promise.all(req.files.map(async (file) => {
-    try {
-      const buffer = await readFile(file.path);
-      const metadata = parseDicomMetadata(buffer, file.originalname);
-      metadata.fileSize = file.size;
-      filesWithMetadata.push({ file, metadata });
-    } catch (err) {
-      // Delete invalid file
+  // Validate in small batches — reading every file at once can exhaust memory
+  // for large uploads (up to 500 files × 500MB each)
+  const BATCH_SIZE = 8;
+  for (let i = 0; i < req.files.length; i += BATCH_SIZE) {
+    const batch = req.files.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(async (file) => {
       try {
-        await unlink(file.path);
-      } catch {
-        // ignore
+        const buffer = await readFile(file.path);
+        const metadata = parseDicomMetadata(buffer, file.originalname);
+        metadata.fileSize = file.size;
+        filesWithMetadata.push({ file, metadata });
+      } catch (err) {
+        // Delete invalid file
+        try {
+          await unlink(file.path);
+        } catch {
+          // ignore
+        }
+        errors.push({
+          filename: file.originalname,
+          error: err.message
+        });
       }
-      errors.push({
-        filename: file.originalname,
-        error: err.message
-      });
-    }
-  }));
+    }));
+  }
 
   // If all files failed validation, reject
   if (filesWithMetadata.length === 0) {

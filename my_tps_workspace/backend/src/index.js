@@ -20,16 +20,18 @@ const PORT = process.env.PORT || 3001;
 app.set('trust proxy', 1);
 
 // Global middleware
+// CORS origins: override with comma-separated CORS_ORIGINS for other environments
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+// Vite auto-increments the port when 5173 is taken — allow common alternates
+for (let port = 5174; port <= 5179; port++) {
+  CORS_ORIGINS.push(`http://localhost:${port}`);
+}
+
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    'http://localhost:5179',
-    'http://localhost:5174',
-    'http://localhost:5175',
-    'http://localhost:5176',
-    'http://localhost:5177',
-    'http://localhost:5178',
-  ],
+  origin: CORS_ORIGINS,
   credentials: true,
 }));
 

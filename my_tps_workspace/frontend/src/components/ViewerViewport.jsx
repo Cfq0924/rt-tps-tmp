@@ -9,6 +9,12 @@ const VIEWPORT_ELEMENT_ID = 'dicom-viewport';
 const RENDERING_ENGINE_ID = 'myTPSRenderingEngine';
 const VIEWPORT_ID = 'CT_VIEWPORT';
 
+// StackViewport is used for CT display. The VolumeViewport (ORTHOGRAPHIC)
+// migration is on hold: with cornerstone3D 4.20–4.22 the volume texture never
+// receives data on real (hardware) GL contexts — the viewport stays black,
+// while the exact same code renders correctly under software GL
+// (SwiftShader). See WISSEN.md §9 before resuming that work.
+
 export default function ViewerViewport({
   imageId,
   activeTool,
@@ -32,11 +38,14 @@ export default function ViewerViewport({
   const [error, setError] = useState(null);
   const [status, setStatus] = useState('');
   const [viewportReady, setViewportReady] = useState(false);
-  const currentIndexRef = useRef(currentImageIndex);
+  const [viewportFrameOfReferenceUID, setViewportFrameOfReferenceUID] = useState(null);
   const activeToolRef = useRef(activeTool);
   const lastSetIndexRef = useRef(currentImageIndex);
   // Track what triggered the last index change to avoid feedback loops
   const scrollSourceRef = useRef('init'); // 'init' | 'parent' | 'internal'
+  // The imageId whose stack is (being) loaded — guards against duplicate
+  // stack loading from React StrictMode double-invoked effects
+  const loadedStackForRef = useRef(null);
 
   // Build visibility map from structures array
   const visibilityMapRef = useRef({});
@@ -48,10 +57,14 @@ export default function ViewerViewport({
     visibilityMapRef.current = map;
   }, [structures]);
 
-  // Use cornerstone3D native contour segmentation
+  // Render RT Structure contours via cornerstone3D native segmentation.
+  // Contours attach only after the stack is on the viewport
+  // (viewportFrameOfReferenceUID flips from null once that happened).
   const viewportForSeg = viewportReady ? viewportRef.current : null;
   const { setSegmentVisibility } = useRTContourSegmentation({
     viewport: viewportForSeg,
+    frameOfReferenceUID: viewportFrameOfReferenceUID,
+    imageIds,
     roiSequence: structures,
     contourSequence: contours,
     visibility: visibilityMapRef.current,
@@ -69,10 +82,6 @@ export default function ViewerViewport({
     activeToolRef.current = activeTool;
   }, [activeTool]);
 
-  useEffect(() => {
-    currentIndexRef.current = currentImageIndex;
-  }, [currentImageIndex]);
-
   // Set active tool when it changes
   useEffect(() => {
     if (!isReady) return;
@@ -82,7 +91,7 @@ export default function ViewerViewport({
 
     // Deactivate all tools first
     const tools = ['Pan', 'Zoom', 'WindowLevel', 'StackScroll', 'Length', 'Angle',
-                    'Probe', 'RectangleScissorsTool', 'CircleScissorsTool', 'BrushTool', 'EraserTool'];
+                    'Probe', 'RectangleScissor', 'CircleScissor', 'Brush', 'Eraser'];
     tools.forEach(toolName => {
       try {
         if (toolGroup.hasTool(toolName)) {
@@ -93,12 +102,12 @@ export default function ViewerViewport({
       }
     });
 
-    // Map short names to class names for tools that need it
+    // Map toolbar ids to registered tool names
     const toolNameMap = {
-      'RectangleScissors': 'RectangleScissorsTool',
-      'CircleScissors': 'CircleScissorsTool',
-      'Brush': 'BrushTool',
-      'Eraser': 'EraserTool',
+      'RectangleScissors': 'RectangleScissor',
+      'CircleScissors': 'CircleScissor',
+      'Brush': 'Brush',
+      'Eraser': 'Eraser',
     };
     const toolToActivate = toolNameMap[activeTool] || activeTool;
 
@@ -111,7 +120,6 @@ export default function ViewerViewport({
   // Initialize Cornerstone
   useEffect(() => {
     let mounted = true;
-    let eventCleanupFns = [];
 
     const init = async () => {
       try {
@@ -141,14 +149,9 @@ export default function ViewerViewport({
         // Add viewport to default tool group
         addViewportToToolGroup(VIEWPORT_ID, RENDERING_ENGINE_ID);
 
-        // Enable stack prefetch for smooth scrolling
-        cornerstoneTools.utilities.stackPrefetch.enable(element);
-
-        // Store viewport reference for overlay
         viewportRef.current = renderingEngine.getViewport(VIEWPORT_ID);
         setViewportReady(true);
 
-        setStatus('Viewport ready');
         if (mounted) {
           setIsReady(true);
         }
@@ -163,15 +166,13 @@ export default function ViewerViewport({
 
     return () => {
       mounted = false;
-      // Clean up event listeners
-      eventCleanupFns.forEach(fn => fn());
       if (renderingEngineRef.current) {
         renderingEngineRef.current.destroy();
       }
     };
   }, []);
 
-  // Handle image loading
+  // Handle stack loading
   useEffect(() => {
     if (!isReady) {
       return;
@@ -183,51 +184,53 @@ export default function ViewerViewport({
       return;
     }
 
-    let cancelled = false;
-    let eventCleanupFns = [];
+    // React StrictMode (dev) invokes every effect twice with the same props —
+    // deduplicate by imageId so the stack is only created and loaded once.
+    // Reset on failure so a re-render can retry.
+    if (loadedStackForRef.current === imageId) return;
 
     const loadAndDisplay = async () => {
+      loadedStackForRef.current = imageId;
+
       setIsLoading(true);
-      setStatus('Loading images...');
+      setStatus(`Loading ${imageIds.length} images...`);
 
       try {
-        // Use viewportRef directly since it's set after init
         const vp = viewportRef.current;
         if (!vp) {
           throw new Error('Viewport not available');
         }
 
-        setStatus(`setStack with ${imageIds.length} images...`);
-        await vp.setStack(imageIds, currentImageIndex);
-        setStatus('Rendering...');
-        vp.render();
-        setStatus('Render complete');
+        // setStack renders the first image; the datasets for every imageId are
+        // cached as they stream in (metadata queries depend on that)
+        await vp.setStack(imageIds, 0);
 
-        if (!cancelled) {
-          setIsLoading(false);
+        // Contours need the viewport FoR, which is only valid once the stack
+        // is in place — flip it from null to let the hook initialize
+        setViewportFrameOfReferenceUID(vp.getFrameOfReferenceUID());
+
+        // Jump to the specified slice index
+        if (currentImageIndex > 0) {
+          await vp.setCurrentImageIdIndex(currentImageIndex);
         }
+
+        vp.render();
+        setStatus('');
+        setIsLoading(false);
       } catch (err) {
-        if (!cancelled) {
-          console.error('[Viewer] Failed:', err);
-          setError(err.message);
-          setIsLoading(false);
-        }
+        loadedStackForRef.current = null;
+        console.error('[Viewer] Failed:', err);
+        setError(err.message);
+        setIsLoading(false);
       }
     };
 
     loadAndDisplay();
-
-    return () => {
-      cancelled = true;
-      // Clean up event listeners
-      eventCleanupFns.forEach(fn => fn());
-    };
-    // Only depend on isReady and imageIds - currentImageIndex is handled by Cornerstone internally
+    // currentImageIndex is handled via setCurrentImageIdIndex / camera events, not as a dep
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReady, imageId]);
 
   // Handle programmatic index changes (e.g., thumbnail clicks)
-  // This is separate from internal scroll handled by Cornerstone
   useEffect(() => {
     if (!isReady) return;
 
@@ -241,45 +244,32 @@ export default function ViewerViewport({
 
     lastSetIndexRef.current = currentImageIndex;
 
-    vp.setStack(imageIds, currentImageIndex).then(() => {
-      vp.render();
-    }).catch(console.error);
-  }, [isReady, currentImageIndex, imageId]);
+    vp.setCurrentImageIdIndex(currentImageIndex);
+  }, [isReady, currentImageIndex]);
 
-  // Track Cornerstone internal slice changes and notify parent
+  // Track Cornerstone scroll events and notify the parent of the slice index
   useEffect(() => {
     if (!isReady) return;
 
-    let rafId;
-    let lastKnownIndex = -1;
+    const vp = viewportRef.current;
+    if (!vp || !onImageIndexChange) return;
 
-    const checkSliceChange = () => {
-      const vp = viewportRef.current;
-      if (vp && onImageIndexChange) {
-        const currentIdx = vp.getCurrentImageIdIndex();
-        if (lastKnownIndex !== -1 && currentIdx !== lastKnownIndex) {
-          scrollSourceRef.current = 'internal';
-          onImageIndexChange(currentIdx);
-        }
+    let lastKnownIndex = vp.getCurrentImageIdIndex();
+
+    const onCameraModified = () => {
+      const currentIdx = vp.getCurrentImageIdIndex();
+      if (currentIdx !== lastKnownIndex) {
+        scrollSourceRef.current = 'internal';
+        lastSetIndexRef.current = currentIdx;
+        onImageIndexChange(currentIdx);
         lastKnownIndex = currentIdx;
       }
-      rafId = requestAnimationFrame(checkSliceChange);
     };
 
-    // Start polling after a short delay to ensure viewport is ready
-    const timeoutId = setTimeout(() => {
-      const vp = viewportRef.current;
-      if (vp) {
-        lastKnownIndex = vp.getCurrentImageIdIndex();
-      }
-      rafId = requestAnimationFrame(checkSliceChange);
-    }, 500);
+    vp.element.addEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCameraModified);
 
     return () => {
-      clearTimeout(timeoutId);
-      if (rafId) {
-        cancelAnimationFrame(rafId);
-      }
+      vp.element.removeEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCameraModified);
     };
   }, [isReady, onImageIndexChange]);
 
@@ -292,7 +282,6 @@ export default function ViewerViewport({
     <Box ref={containerRef} sx={{ width: '100%', height: '100%', position: 'relative', background: '#07111f' }}>
       <div id={VIEWPORT_ELEMENT_ID} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }} />
 
-      {/* RT Structure Overlay - Cornerstone native segmentation handles rendering */}
       {status && (
         <Box sx={{ position: 'absolute', top: 8, left: 8, right: 8, background: 'rgba(0,0,0,0.7)', p: 1, borderRadius: 0.5 }}>
           <Typography variant="caption" sx={{ fontFamily: 'mono', fontSize: '0.65rem', color: '#58c4dc', wordBreak: 'break-all' }}>

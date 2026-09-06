@@ -9,9 +9,9 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@cornerstonejs/core": "^4.20.0",
-    "@cornerstonejs/dicom-image-loader": "^4.20.4",
-    "@cornerstonejs/tools": "^4.20.0",
+    "@cornerstonejs/core": "^4.22.13",
+    "@cornerstonejs/dicom-image-loader": "^4.22.13",
+    "@cornerstonejs/tools": "^4.22.13",
     "@emotion/react": "^11.13.5",
     "@emotion/styled": "^11.13.5",
     "@mui/icons-material": "^5.17.0",

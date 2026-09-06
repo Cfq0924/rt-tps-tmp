@@ -88,10 +88,10 @@ npm run build
 
 - **DICOM Import**: Upload and parse DICOM files (CT, RTSTRUCT, RTDOSE)
 - **Patient Management**: Create, browse, and associate patients with DICOM data
-- **DICOM Visualization**: Display CT images with Cornerstone3D
-- **RT Structure Overlay**: Render radiation therapy structure contours on CT
-- **RT Dose Display**: Display dose distributions with color mapping
-- **AI Auto-Segmentation**: Integration endpoint for organ contouring (Phase 4 ready)
+- **DICOM Visualization**: Display CT images with Cornerstone3D (VolumeViewport)
+- **RT Structure Overlay**: Render radiation therapy structure contours on CT via Cornerstone3D segmentation
+- **RT Dose**: Dose grid metadata parsing and display (dose overlay rendering on images not implemented yet)
+- **AI Auto-Segmentation**: Integration endpoint for organ contouring (Phase 4, requires external AI service)
 
 ### Screenshots
 
@@ -111,12 +111,12 @@ npm run build
 
 ## Key Components
 
-### RTStructureOverlay
+### useRTContourSegmentation
 
-Renders RT Structure contours on Cornerstone viewport using DICOM Patient Coordinate System transformation:
+Renders RT Structure contours via Cornerstone3D native segmentation:
 
 ```
-World (mm) → Image Pixel → Canvas Pixel
+RTSTRUCT → contours (patient coords, mm) → Cornerstone geometries → contour representation
 ```
 
 ### RT Dose Coordinate Transform
@@ -128,12 +128,11 @@ Dose → Patient (Dose→Patient matrix) → CT (invert CT→Patient matrix)
 ## Testing
 
 ```bash
-# All tests
+# All tests (backend node --test + frontend vitest)
 npm run test
-
-# E2E tests (Playwright)
-npm run test:e2e
 ```
+
+E2E tests (Playwright) are planned but not set up yet.
 
 ## Reference Implementations
 

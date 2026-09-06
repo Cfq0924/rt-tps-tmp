@@ -4,8 +4,9 @@ import {
   cornerstoneStreamingImageVolumeLoader,
   cornerstoneStreamingDynamicImageVolumeLoader,
 } from '@cornerstonejs/core/loaders';
-import dicomImageLoader, { wadouri } from '@cornerstonejs/dicom-image-loader';
+import dicomImageLoader from '@cornerstonejs/dicom-image-loader';
 
+// Import basic tools from main package
 const {
   PanTool,
   ZoomTool,
@@ -14,11 +15,13 @@ const {
   LengthTool,
   AngleTool,
   ProbeTool,
-  RectangleScissorsTool,
-  CircleScissorsTool,
-  BrushTool,
-  EraserTool,
 } = cornerstoneTools;
+
+// Import segmentation tools from subpath exports
+import RectScissorsTool from '@cornerstonejs/tools/tools/segmentation/RectangleScissorsTool';
+import CircleScissorsTool from '@cornerstonejs/tools/tools/segmentation/CircleScissorsTool';
+import BrushTool from '@cornerstonejs/tools/tools/segmentation/BrushTool';
+import EraserTool from '@cornerstonejs/tools/tools/AnnotationEraserTool';
 
 const { MouseBindings } = cornerstoneTools.Enums;
 
@@ -49,8 +52,14 @@ export async function initCornerstone() {
     try {
       window.cornerstone = cornerstone;
 
-      await cornerstone.init();
+      // Initialize dicomImageLoader first (per official cornerstone3D examples)
       dicomImageLoader.init();
+
+      // Initialize cornerstone core
+      await cornerstone.init();
+
+      // Register the wadouri image loader and metadata provider
+      dicomImageLoader.wadouri.register();
 
       cornerstone.volumeLoader.registerUnknownVolumeLoader(
         cornerstoneStreamingImageVolumeLoader
@@ -79,7 +88,7 @@ export async function initCornerstone() {
       cornerstoneTools.addTool(LengthTool);
       cornerstoneTools.addTool(AngleTool);
       cornerstoneTools.addTool(ProbeTool);
-      cornerstoneTools.addTool(RectangleScissorsTool);
+      cornerstoneTools.addTool(RectScissorsTool);
       cornerstoneTools.addTool(CircleScissorsTool);
       cornerstoneTools.addTool(BrushTool);
       cornerstoneTools.addTool(EraserTool);
@@ -104,12 +113,10 @@ export async function initCornerstone() {
 export function createDefaultToolGroup() {
   const toolGroup = cornerstoneTools.ToolGroupManager.createToolGroup(DEFAULT_TOOL_GROUP_ID);
   if (!toolGroup) {
-    console.warn('[Init] Tool group already exists');
     return;
   }
 
   // Add tools to the tool group
-  // Note: Tool names must match how they were registered
   toolGroup.addTool('Pan');
   toolGroup.addTool('Zoom');
   toolGroup.addTool('WindowLevel');
@@ -117,21 +124,17 @@ export function createDefaultToolGroup() {
   toolGroup.addTool('Length');
   toolGroup.addTool('Angle');
   toolGroup.addTool('Probe');
-  // Segmentation tools - use class names as registered
-  toolGroup.addTool('RectangleScissorsTool');
-  toolGroup.addTool('CircleScissorsTool');
-  toolGroup.addTool('BrushTool');
-  toolGroup.addTool('EraserTool');
+  toolGroup.addTool('RectangleScissor');
+  toolGroup.addTool('CircleScissor');
+  toolGroup.addTool('Brush');
+  toolGroup.addTool('Eraser');
 
   // Set default active tool
   toolGroup.setToolActive('Pan', { bindings: [{ mouseButton: 0 }] });
-  // Window/Level on right click
   toolGroup.setToolActive('WindowLevel', { bindings: [{ mouseButton: 2 }] });
-  // Stack scroll on wheel
   toolGroup.addTool('StackScroll');
   toolGroup.setToolActive('StackScroll', { bindings: [{ mouseButton: MouseBindings.Wheel }] });
 
-  console.log('[Init] Default tool group created');
   return toolGroup;
 }
 
@@ -142,7 +145,6 @@ export function addViewportToToolGroup(viewportId, renderingEngineId) {
   const toolGroup = cornerstoneTools.ToolGroupManager.getToolGroup(DEFAULT_TOOL_GROUP_ID);
   if (toolGroup) {
     toolGroup.addViewport(viewportId, renderingEngineId);
-    console.log(`[Init] Viewport ${viewportId} added to tool group`);
   }
 }
 
@@ -154,3 +156,25 @@ export function isCsInitialized() {
 }
 
 export { cornerstone, cornerstoneTools };
+
+/**
+ * CT Transfer Function for Volume Actor
+ * Sets the window/level (WW: 400, WC: 40) for CT images
+ * This is required for proper CT rendering in VolumeViewport
+ */
+const windowWidth = 400;
+const windowCenter = 40;
+
+const lower = windowCenter - windowWidth / 2.0;
+const upper = windowCenter + windowWidth / 2.0;
+
+const ctVoiRange = { lower, upper };
+
+export function setCtTransferFunctionForVolumeActor({ volumeActor }) {
+  volumeActor
+    .getProperty()
+    .getRGBTransferFunction(0)
+    .setMappingRange(lower, upper);
+}
+
+export { ctVoiRange };

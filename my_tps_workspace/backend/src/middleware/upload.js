@@ -37,8 +37,8 @@ const upload = multer({
 });
 
 function getExtension(filename) {
-  const ext = filename.slice(filename.lastIndexOf('.'));
-  return ext.toLowerCase() || '';
+  const dot = filename.lastIndexOf('.');
+  return dot > -1 ? filename.slice(dot).toLowerCase() : '';
 }
 
 export function handleMulterError(err, req, res, next) {

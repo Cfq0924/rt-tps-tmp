@@ -1,26 +1,16 @@
-import { Box, Typography, Slider, Switch, FormControlLabel, Divider } from '@mui/material';
+import { Box, Typography, Divider } from '@mui/material';
 
 /**
- * DosePanel - Controls for RT Dose overlay
+ * DosePanel - RT Dose information
+ *
+ * The backend currently exposes dose grid metadata only (no pixel data), so
+ * dose overlay rendering is not implemented yet. This panel shows what is
+ * available instead of controls that do nothing.
  *
  * @param {Object} props
- * @param {Object|null} props.doseData - RT Dose data object
- * @param {boolean} props.visible - Dose visibility state
- * @param {number} props.opacity - Dose opacity (0-1)
- * @param {number} props.threshold - Dose threshold percentage (0-100)
- * @param {Function} props.onVisibleChange - Callback when visibility changes
- * @param {Function} props.onOpacityChange - Callback when opacity changes
- * @param {Function} props.onThresholdChange - Callback when threshold changes
+ * @param {Object|null} props.doseData - RT Dose metadata object from /api/rtdose/:fileId
  */
-export default function DosePanel({
-  doseData,
-  visible,
-  opacity,
-  threshold,
-  onVisibleChange,
-  onOpacityChange,
-  onThresholdChange,
-}) {
+export default function DosePanel({ doseData }) {
   if (!doseData) {
     return (
       <Box sx={{ p: 2 }}>
@@ -30,14 +20,6 @@ export default function DosePanel({
       </Box>
     );
   }
-
-  const handleOpacityChange = (_, value) => {
-    onOpacityChange(value / 100);
-  };
-
-  const handleThresholdChange = (_, value) => {
-    onThresholdChange(value);
-  };
 
   return (
     <Box sx={{ width: '100%', overflow: 'auto' }}>
@@ -55,91 +37,24 @@ export default function DosePanel({
         DOSE
       </Typography>
 
-      <Box sx={{ px: 2, py: 1 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={visible}
-              onChange={(e) => onVisibleChange(e.target.checked)}
-              size="small"
-            />
-          }
-          label={
-            <Typography variant="caption" sx={{ fontFamily: 'mono', fontSize: '0.7rem' }}>
-              Show Dose
-            </Typography>
-          }
-          sx={{ mb: 1 }}
-        />
-
-        <Typography
-          variant="caption"
-          sx={{ display: 'block', color: 'text.secondary', fontFamily: 'mono', fontSize: '0.65rem', mb: 1 }}
-        >
+      <Box sx={{ px: 2, py: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+        <Typography variant="caption" sx={{ fontFamily: 'mono', fontSize: '0.7rem' }}>
           Max: {doseData.maxDose?.toFixed(2) || '0'} {doseData.doseUnits || 'cGy'}
         </Typography>
-
-        <Divider sx={{ my: 1 }} />
-
-        <Typography
-          variant="caption"
-          sx={{ display: 'block', color: 'text.secondary', fontFamily: 'mono', fontSize: '0.65rem', mb: 1 }}
-        >
-          Opacity: {Math.round(opacity * 100)}%
-        </Typography>
-        <Slider
-          value={opacity * 100}
-          onChange={handleOpacityChange}
-          disabled={!visible}
-          size="small"
-          min={0}
-          max={100}
-          sx={{
-            color: '#f6c177',
-            '&.Mui-disabled': {
-              color: 'rgba(246, 193, 119, 0.3)',
-            },
-          }}
-        />
-
-        <Typography
-          variant="caption"
-          sx={{ display: 'block', color: 'text.secondary', fontFamily: 'mono', fontSize: '0.65rem', mb: 1, mt: 2 }}
-        >
-          Threshold: {threshold}%
-        </Typography>
-        <Slider
-          value={threshold}
-          onChange={handleThresholdChange}
-          disabled={!visible}
-          size="small"
-          min={0}
-          max={100}
-          sx={{
-            color: '#f6c177',
-            '&.Mui-disabled': {
-              color: 'rgba(246, 193, 119, 0.3)',
-            },
-          }}
-        />
-
-        <Box
-          sx={{
-            mt: 2,
-            height: 12,
-            borderRadius: 1,
-            background: 'linear-gradient(to right, rgba(246,193,119,0.1), rgba(246,193,119,1))',
-            border: '1px solid rgba(246,193,119,0.3)',
-          }}
-        />
-        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-          <Typography variant="caption" sx={{ fontFamily: 'mono', fontSize: '0.6rem', color: 'text.disabled' }}>
-            0%
+        {doseData.doseType && (
+          <Typography variant="caption" sx={{ fontFamily: 'mono', fontSize: '0.65rem', color: 'text.secondary' }}>
+            Type: {doseData.doseType}
           </Typography>
-          <Typography variant="caption" sx={{ fontFamily: 'mono', fontSize: '0.6rem', color: 'text.disabled' }}>
-            100%
-          </Typography>
-        </Box>
+        )}
+        <Typography variant="caption" sx={{ fontFamily: 'mono', fontSize: '0.65rem', color: 'text.secondary' }}>
+          Grid: {doseData.columns} × {doseData.rows} × {doseData.numberOfFrames} frames
+        </Typography>
+
+        <Divider sx={{ my: 0.5 }} />
+
+        <Typography variant="caption" sx={{ fontSize: '0.65rem', color: 'text.secondary', fontStyle: 'italic' }}>
+          Dose overlay rendering is not implemented yet — metadata only.
+        </Typography>
       </Box>
     </Box>
   );

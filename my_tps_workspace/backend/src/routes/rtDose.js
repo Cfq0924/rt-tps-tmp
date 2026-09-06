@@ -5,8 +5,7 @@ import { parseRTDose, calculateDoseValue } from '../services/rtDoseService.js';
 
 const router = Router();
 
-// GET /api/rtstruct/:fileId - Parse RTSTRUCT and return ROI/contour data
-// Note: For RT Dose, use /api/rtdose/:fileId
+// GET /api/rtdose/:fileId - Parse RTDOSE and return dose grid metadata
 router.get('/:fileId', authMiddleware, async (req, res, next) => {
   try {
     const fileId = parseInt(req.params.fileId, 10);
@@ -23,7 +22,7 @@ router.get('/:fileId', authMiddleware, async (req, res, next) => {
     const result = await parseRTDose(file.file_path);
 
     // Calculate dose values
-    const doseValues = calculateDoseValue(result.pixelData, result.doseGridScaling);
+    const doseValues = calculateDoseValue(result.pixelData, result.doseGridScaling, result.doseUnits);
 
     // Find max dose
     let maxDose = 0;

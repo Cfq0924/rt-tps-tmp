@@ -52,7 +52,7 @@ test_module/            # Reference implementations (do NOT modify)
 ```
 Request → Rate Limiter → CORS → Auth Middleware → Routes → Services → Database
 ```
-- **Auth:** JWT tokens with bcrypt password hashing; HMAC signatures for public file downloads
+- **Auth:** JWT tokens with bcrypt password hashing; HMAC signatures for public file downloads. **Auth is deliberately disabled for development** (`authMiddleware` returns a mock user, `/login` route removed) — this is a phase decision, to be re-enabled at productization.
 - **Routes:** Modular - auth, patients, studies, files, contouring
 - **Services:** Business logic separated from routes (patientService, dicomService, contouringService)
 - **Database:** SQLite with better-sqlite3; foreign key relationships between patients, studies, series, instances
@@ -87,18 +87,18 @@ Dose value: `Pixel Data × Dose Grid Scaling (3004,000e)`
 ## Commands
 
 ```bash
-# Root workspace (monorepo with workspaces)
+# Root workspace (monorepo with workspaces) — run from my_tps_workspace/
 npm run dev          # Start both backend and frontend concurrently
 npm run dev:backend  # Backend only: node --watch src/index.js (port 3001)
 npm run dev:frontend # Frontend only: vite (port 5173)
-npm run build        # Build both frontend and backend
-npm run test         # Run backend tests (node --test)
+npm run build        # Build frontend (backend is no-build ESM)
+npm run test         # Backend tests (node --test) + frontend tests (vitest)
 
-# Frontend tests
-npm run test:e2e      # E2E tests (Playwright)
-
-# Direct backend test
+# Focused runs
 cd backend && node --test
+cd frontend && npx vitest run
+
+# E2E tests (Playwright): planned, NOT set up yet — ignore any docs mentioning test:e2e
 ```
 
 ### Environment Variables

@@ -4,7 +4,9 @@ import { createHmac } from 'crypto';
 import { join } from 'path';
 
 const HMAC_SECRET = process.env.HMAC_SECRET || 'dev-hmac-secret-change-in-production';
-const DOWNLOAD_EXPIRY_SECONDS = 900; // 15 minutes
+// Signed download URLs are used by the viewer to load every slice, so a short
+// expiry breaks scrolling in long sessions. Override for development via env.
+const DOWNLOAD_EXPIRY_SECONDS = parseInt(process.env.SIGNED_URL_EXPIRY_SECONDS, 10) || 900;
 
 export function registerDicomFile({ studyId, metadata, filePath, userId, reqId }) {
   const db = getDb();

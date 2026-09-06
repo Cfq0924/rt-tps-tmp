@@ -211,14 +211,16 @@ function extractPixelData(dataSet, rows, columns, numberOfFrames) {
  * Calculate dose values from pixel data and dose grid scaling
  * @param {Uint16Array|Float32Array|Array} pixelData - Raw pixel data
  * @param {number} doseGridScaling - Dose grid scaling factor
- * @returns {Float32Array} Calculated dose values in cGy (pixel * scaling * 100)
+ * @param {string} doseUnits - Dose Units (3004,0002): 'GY' or 'CGY'; unknown units are treated as GY
+ * @returns {Float32Array} Calculated dose values in cGy (pixel * scaling, converted to cGy)
  */
-export function calculateDoseValue(pixelData, doseGridScaling) {
+export function calculateDoseValue(pixelData, doseGridScaling, doseUnits = 'GY') {
   if (!pixelData || pixelData.length === 0) {
     return new Float32Array(0);
   }
 
-  const scalingFactor = doseGridScaling * 100; // Convert to cGy
+  const unitFactor = String(doseUnits).toUpperCase() === 'CGY' ? 1 : 100; // Convert GY to cGy
+  const scalingFactor = doseGridScaling * unitFactor;
   const result = new Float32Array(pixelData.length);
 
   for (let i = 0; i < pixelData.length; i++) {

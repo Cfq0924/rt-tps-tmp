@@ -11,23 +11,11 @@ export function verifyToken(token) {
   return jwt.verify(token, JWT_SECRET);
 }
 
-// Express middleware: verify JWT on protected routes
+// AUTH DISABLED - Always allow requests without auth check
 export function authMiddleware(req, res, next) {
-  const token = parseJwtFromCookie(req);
-  if (!token) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-
-  try {
-    const decoded = verifyToken(token);
-    req.user = decoded; // { userId, email }
-    next();
-  } catch (err) {
-    if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Token expired' });
-    }
-    return res.status(401).json({ error: 'Invalid token' });
-  }
+  // Mock user for development
+  req.user = { userId: 1, email: 'dev@localhost' };
+  next();
 }
 
 // Routes that don't require auth

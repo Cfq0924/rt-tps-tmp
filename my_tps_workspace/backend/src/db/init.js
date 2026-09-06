@@ -1,23 +1,21 @@
 import Database from 'better-sqlite3';
-import { readFileSync } from 'fs';
+import { readFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { fileURLToPath as fileURLToPathDir } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const DB_PATH = process.env.DB_PATH || join(__dirname, '../../data/tps.db');
+const DATA_DIR = join(__dirname, '../../data');
+
+// Ensure data directory exists before the database is opened
+mkdirSync(DATA_DIR, { recursive: true });
 
 let db;
 
 export function getDb() {
   if (!db) {
-    // Ensure data directory exists
-    import('fs').then(({ mkdirSync }) => {
-      mkdirSync(join(__dirname, '../../data'), { recursive: true });
-    });
-
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');

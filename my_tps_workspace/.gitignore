@@ -41,3 +41,6 @@ coverage/
 
 # Knowledge base (personal notes, not for commit)
 WISSEN.md
+
+# One-off backend debug/migration scripts (local only)
+backend/scripts/

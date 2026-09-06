@@ -32,6 +32,24 @@ export default function StudyViewerPage() {
   const [imageIds, setImageIds] = useState([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
+  // Non-CT single-file viewer imageId (signed URL resolved asynchronously)
+  const [nonCtImageId, setNonCtImageId] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setNonCtImageId(null);
+    if (activeModality === 'CT' || !selectedFileId) return;
+    (async () => {
+      try {
+        const url = await getSignedUrl(selectedFileId);
+        if (!cancelled) setNonCtImageId(`wadouri:${window.location.origin}${url}`);
+      } catch (err) {
+        console.error(`Failed to get URL for file ${selectedFileId}:`, err);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeModality, selectedFileId]);
+
   // RT Structure state
   const [structures, setStructures] = useState([]);
   const [selectedStructureId, setSelectedStructureId] = useState(null);
@@ -48,9 +66,6 @@ export default function StudyViewerPage() {
 
   // RT Dose state
   const [doseData, setDoseData] = useState(null);
-  const [doseVisible, setDoseVisible] = useState(false);
-  const [doseOpacity, setDoseOpacity] = useState(0.5);
-  const [doseThreshold, setDoseThreshold] = useState(20);
 
   // Right panel tab
   const [rightTab, setRightTab] = useState(0);
@@ -113,14 +128,17 @@ export default function StudyViewerPage() {
         return aNum - bNum;
       });
 
-    if (ctFiles.length === 0) return;
+    if (ctFiles.length === 0) {
+      return;
+    }
 
     const ids = [];
     for (const file of ctFiles) {
       try {
         const url = await getSignedUrl(file.id);
-        // Use relative URL - loadFileRequest will prepend origin
-        ids.push(`wadouri:${url}`);
+        // Same-origin URL through the Vite proxy (no CORS issues), resolved
+        // against the actual host/port the app is served from
+        ids.push(`wadouri:${window.location.origin}${url}`);
       } catch (err) {
         console.error(`Failed to get URL for file ${file.id}:`, err);
       }
@@ -138,10 +156,9 @@ export default function StudyViewerPage() {
     const res = await fetch(`/api/files/signed-url/${fileId}`, { credentials: 'include' });
     if (!res.ok) throw new Error('Failed to get signed URL');
     const data = await res.json();
-    // wadouri scheme requires absolute URL with protocol and host
-    // Point directly to backend (port 3001) since Vite proxy may not handle query strings correctly
-    const baseUrl = `http://localhost:3001`;
-    return `${baseUrl}${data.url}`;
+    // Return just the path, let the Vite proxy handle it
+    // This avoids CORS issues with direct localhost:3001 requests
+    return data.url;
   }
 
   async function fetchRTSTRUCT(fileId) {
@@ -266,7 +283,7 @@ export default function StudyViewerPage() {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          dicomFilePath: rtStructFiles[0].file_path,
+          fileId: rtStructFiles[0].id,
           organName,
         }),
       });
@@ -437,6 +454,7 @@ export default function StudyViewerPage() {
             </Box>
           ) : activeModality === 'CT' && imageIds.length > 0 ? (
             <ViewerViewport
+              key={studyId}
               imageId={currentImageId}
               activeTool={activeTool}
               imageIds={imageIds}
@@ -458,9 +476,10 @@ export default function StudyViewerPage() {
               frameOfReferenceUID={currentCTFile?.frame_of_reference_uid}
               onSegmentVisibilityRef={handleSegmentVisibilityRef}
             />
-          ) : selectedFileId ? (
+          ) : nonCtImageId ? (
             <ViewerViewport
-              imageId={`wadouri:/api/files/signed-url/${selectedFileId}`}
+              key={`nonct-${selectedFileId}`}
+              imageId={nonCtImageId}
               activeTool={activeTool}
             />
           ) : (
@@ -526,15 +545,7 @@ export default function StudyViewerPage() {
               />
             )}
             {rightTab === 1 && (
-              <DosePanel
-                doseData={doseData}
-                visible={doseVisible}
-                opacity={doseOpacity}
-                threshold={doseThreshold}
-                onVisibleChange={setDoseVisible}
-                onOpacityChange={setDoseOpacity}
-                onThresholdChange={setDoseThreshold}
-              />
+              <DosePanel doseData={doseData} />
             )}
           </Box>
         </Box>

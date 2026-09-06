@@ -1,0 +1,10 @@
+# Reference repositories & documentation (1.5GB+, never commit)
+test_module/
+src-doc/
+
+# Local test DICOM data (67MB+)
+test_data/
+
+# Agent tooling state
+ralph/
+.gstack/

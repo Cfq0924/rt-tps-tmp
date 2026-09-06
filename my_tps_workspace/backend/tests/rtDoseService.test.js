@@ -1,9 +1,23 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { existsSync, readdirSync } from 'fs';
+import { join } from 'path';
+import { fileURLToPath } from 'url';
 
-const TEST_RTDOSE_PATH = '/home/cfq/AI/vibe-coding/rt-tps-tmp/test_data/patient1/RD.1.2.246.352.71.7.891085747523.595.20241110204624.dcm';
+// Locate the local test data directory relative to this file. The DICOM test
+// data is not committed (see .gitignore) — tests skip when it is missing.
+const TEST_DATA_DIR = join(fileURLToPath(import.meta.url), '../../../../test_data/patient1');
 
-describe('rtDoseService', () => {
+function findTestFile(prefix) {
+  if (!existsSync(TEST_DATA_DIR)) return null;
+  const fileName = readdirSync(TEST_DATA_DIR).find(f => f.startsWith(prefix));
+  return fileName ? join(TEST_DATA_DIR, fileName) : null;
+}
+
+const TEST_RTDOSE_PATH = findTestFile('RD.');
+const SKIP_REASON = TEST_RTDOSE_PATH ? false : 'test_data/patient1 RTDOSE file not available';
+
+describe('rtDoseService', { skip: SKIP_REASON }, () => {
   describe('parseRTDose', () => {
     it('should parse RTDOSE file and return dose data', async () => {
       const rtDoseService = await import('../src/services/rtDoseService.js');
