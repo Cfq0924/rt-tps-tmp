@@ -132,4 +132,67 @@ describe('rtDoseService', { skip: SKIP_REASON }, () => {
       assert.ok(result.every(v => v === 0), 'All values should be zero');
     });
   });
+
+  describe('32-bit grid parsing (real RD file is BitsAllocated=32)', () => {
+    it('should report DoseSummationType and grid frame offset vector', async () => {
+      const rtDoseService = await import('../src/services/rtDoseService.js');
+      const result = await rtDoseService.parseRTDose(TEST_RTDOSE_PATH);
+
+      assert.strictEqual(result.doseSummationType, 'PLAN', 'Summation type should be PLAN');
+      assert.ok(Array.isArray(result.gridFrameOffsetVector), 'GFOV should be an array');
+      assert.strictEqual(result.gridFrameOffsetVector.length, 87, 'GFOV should have 87 entries');
+      assert.strictEqual(result.gridFrameOffsetVector[0], 0, 'First GFOV offset should be 0');
+      assert.strictEqual(result.gridFrameOffsetVector[1], 3, 'Frame spacing should be 3mm');
+    });
+
+    it('should extract non-zero pixel data from the 32-bit dose grid', async () => {
+      const rtDoseService = await import('../src/services/rtDoseService.js');
+      const result = await rtDoseService.parseRTDose(TEST_RTDOSE_PATH);
+
+      assert.strictEqual(result.bitsAllocated, 32, 'BitsAllocated should be read as 32');
+      assert.strictEqual(result.pixelData.length, 94 * 182 * 87, 'Pixel data length should match grid');
+
+      let max = 0;
+      for (let i = 0; i < result.pixelData.length; i++) {
+        if (result.pixelData[i] > max) max = result.pixelData[i];
+      }
+      assert.ok(max > 0, `Raw pixel max should be > 0, got ${max}`);
+    });
+
+    it('should produce the correct max dose through calculateDoseValue', async () => {
+      const rtDoseService = await import('../src/services/rtDoseService.js');
+      const result = await rtDoseService.parseRTDose(TEST_RTDOSE_PATH);
+      const cgy = rtDoseService.calculateDoseValue(result.pixelData, result.doseGridScaling, result.doseUnits);
+
+      let max = 0;
+      for (let i = 0; i < cgy.length; i++) {
+        if (cgy[i] > max) max = cgy[i];
+      }
+      // Ground truth from an independent dcmjs parse of this file: 1,093,729
+      // raw × 0.00007392 scaling × 100 (GY→cGy) ≈ 8084.84 cGy
+      assert.ok(Math.abs(max - 8084.84) < 0.1, `Max dose should be ~8084.84 cGy, got ${max}`);
+    });
+  });
+
+  describe('extractDoseFrame', () => {
+    it('should extract a single frame from a grid', async () => {
+      const rtDoseService = await import('../src/services/rtDoseService.js');
+      const grid = new Float32Array(12);
+      grid[4] = 1; grid[5] = 2;   // frame 1 (voxelsPerFrame 4)
+      grid[9] = 7;                 // frame 2
+
+      const f1 = rtDoseService.extractDoseFrame(grid, 1, 4);
+      assert.strictEqual(f1.length, 4);
+      assert.strictEqual(f1[0], 1);
+      assert.strictEqual(f1[1], 2);
+    });
+
+    it('should return empty for out-of-range frames', async () => {
+      const rtDoseService = await import('../src/services/rtDoseService.js');
+      const grid = new Float32Array(8);
+      assert.strictEqual(rtDoseService.extractDoseFrame(grid, 2, 4).length, 0);
+      assert.strictEqual(rtDoseService.extractDoseFrame(grid, -1, 4).length, 0);
+      assert.strictEqual(rtDoseService.extractDoseFrame(null, 0, 4).length, 0);
+    });
+  });
 });

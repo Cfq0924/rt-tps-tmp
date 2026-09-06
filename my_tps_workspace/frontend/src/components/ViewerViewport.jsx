@@ -4,6 +4,7 @@ import * as cornerstone from '@cornerstonejs/core';
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import { initCornerstone, addViewportToToolGroup, DEFAULT_TOOL_GROUP_ID } from '../initCornerstone.js';
 import { useRTContourSegmentation } from '../hooks/useRTContourSegmentation.js';
+import RTDoseOverlay from './RTDoseOverlay.jsx';
 
 const VIEWPORT_ELEMENT_ID = 'dicom-viewport';
 const RENDERING_ENGINE_ID = 'myTPSRenderingEngine';
@@ -29,6 +30,15 @@ export default function ViewerViewport({
   pixelSpacing,
   frameOfReferenceUID,
   onSegmentVisibilityRef,  // callback to register setSegmentVisibility function
+  onViewportRef,           // callback to register the cornerstone viewport instance
+  // RT Dose overlay props (pass-through to RTDoseOverlay)
+  doseGrid = null,
+  doseMeta = null,
+  doseVisible = false,
+  doseOpacity = 0.5,
+  doseThreshold = 20,
+  doseCTZ = null,          // z (mm) of the currently displayed CT slice, for the dose overlay
+  isodoseLevels = [],      // user-editable iso line levels (% of maxDose)
 }) {
   const containerRef = useRef(null);
   const renderingEngineRef = useRef(null);
@@ -76,6 +86,14 @@ export default function ViewerViewport({
       onSegmentVisibilityRef(setSegmentVisibility);
     }
   }, [onSegmentVisibilityRef, setSegmentVisibility]);
+
+  // Expose the cornerstone viewport instance to the parent via callback
+  const viewportForParent = viewportReady ? viewportRef.current : null;
+  useEffect(() => {
+    if (onViewportRef) {
+      onViewportRef(viewportForParent);
+    }
+  }, [onViewportRef, viewportForParent]);
 
   // Keep activeTool ref updated
   useEffect(() => {
@@ -209,9 +227,10 @@ export default function ViewerViewport({
         // is in place — flip it from null to let the hook initialize
         setViewportFrameOfReferenceUID(vp.getFrameOfReferenceUID());
 
-        // Jump to the specified slice index
+        // Jump to the specified slice index (scroll API — 4.22 has no
+        // setCurrentImageIdIndex)
         if (currentImageIndex > 0) {
-          await vp.setCurrentImageIdIndex(currentImageIndex);
+          vp.scroll(currentImageIndex - vp.getCurrentImageIdIndex(), false);
         }
 
         vp.render();
@@ -244,7 +263,7 @@ export default function ViewerViewport({
 
     lastSetIndexRef.current = currentImageIndex;
 
-    vp.setCurrentImageIdIndex(currentImageIndex);
+    vp.scroll(currentImageIndex - vp.getCurrentImageIdIndex(), false);
   }, [isReady, currentImageIndex]);
 
   // Track Cornerstone scroll events and notify the parent of the slice index
@@ -281,6 +300,18 @@ export default function ViewerViewport({
   return (
     <Box ref={containerRef} sx={{ width: '100%', height: '100%', position: 'relative', background: '#07111f' }}>
       <div id={VIEWPORT_ELEMENT_ID} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }} />
+
+      {/* RT Dose heat map overlay (transparent canvas above the viewport) */}
+      <RTDoseOverlay
+        viewport={viewportForParent}
+        grid={doseGrid}
+        doseMeta={doseMeta}
+        ctZ={doseCTZ}
+        visible={doseVisible}
+        opacity={doseOpacity}
+        threshold={doseThreshold}
+        isodoseLevels={isodoseLevels}
+      />
 
       {status && (
         <Box sx={{ position: 'absolute', top: 8, left: 8, right: 8, background: 'rgba(0,0,0,0.7)', p: 1, borderRadius: 0.5 }}>

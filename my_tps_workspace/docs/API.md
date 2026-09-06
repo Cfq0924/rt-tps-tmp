@@ -271,6 +271,59 @@ Trigger AI auto-segmentation on an RTSTRUCT file.
 
 ---
 
+## RT Dose
+
+### `GET /rtdose/:fileId`
+
+Parse an RTDOSE file and return dose grid metadata. Requires auth (cookie).
+
+**Response**:
+```json
+{
+  "fileId": 90,
+  "doseGridScalingPresent": true,
+  "doseType": "PHYSICAL",
+  "doseUnits": "GY",
+  "doseSummationType": "PLAN",
+  "rows": 94,
+  "columns": 182,
+  "numberOfFrames": 87,
+  "imagePosition": { "x": -227.54, "y": -310.03, "z": -1060.3 },
+  "imageOrientation": { "x": [1,0,0], "y": [0,1,0], "z": [0,0,1] },
+  "pixelSpacing": { "i": 2.5, "j": 2.5 },
+  "gridFrameOffsetVector": [0, 3, 6],
+  "maxDose": 8084.84,
+  "gridSize": { "rows": 94, "columns": 182, "frames": 87 }
+}
+```
+
+Notes:
+- `maxDose` is in **cGy** (pixel × DoseGridScaling, converted from DoseUnits).
+- `pixelSpacing` is DICOM order: `i` = row spacing (y), `j` = column spacing (x).
+- `gridFrameOffsetVector` holds the per-frame z offset (mm) relative to `imagePosition.z`.
+
+**Errors**:
+- `400` File is not an RTDOSE
+- `404` File not found
+
+### `GET /rtdose/:fileId/grid[?frame=k]`
+
+Binary dose grid as **little-endian Float32, cGy** (`application/octet-stream`).
+Values are already scaled (pixel × DoseGridScaling × unit factor) — clients must
+not rescale. Layout is frame-major `[k][j][i]`, row-major within a frame
+(x fastest). Without `frame`, returns all frames (~6MB for a typical grid);
+with `frame=k`, a single frame (rows×columns×4 bytes).
+
+**Response headers**:
+- `X-Dose-Rows`, `X-Dose-Columns`, `X-Dose-Frames` — grid dimensions
+- `X-Dose-Units: cGy`
+
+**Errors**:
+- `400` `frame` out of range or not an integer
+- `404` File not found
+
+---
+
 ## Error Responses
 
 All errors follow this format:

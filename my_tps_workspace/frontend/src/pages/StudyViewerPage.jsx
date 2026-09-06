@@ -10,6 +10,8 @@ import ToolbarComponent from '../components/Toolbar.jsx';
 import ViewerViewport from '../components/ViewerViewport.jsx';
 import StructurePanel from '../components/StructurePanel.jsx';
 import DosePanel from '../components/DosePanel.jsx';
+import { useRTDose } from '../hooks/useRTDose.js';
+import { DEFAULT_ISODOSE_LEVELS } from '../lib/doseTransform.js';
 import { initCornerstone } from '../initCornerstone.js';
 
 export default function StudyViewerPage() {
@@ -64,8 +66,19 @@ export default function StudyViewerPage() {
     segmentVisibilityToggleRef.current = toggleFn;
   }, []);
 
-  // RT Dose state
-  const [doseData, setDoseData] = useState(null);
+  // Callback to register the cornerstone viewport instance (for overlays)
+  const handleViewportRef = useCallback((vp) => {
+    viewportRef.current = vp;
+  }, []);
+
+  // RT Dose state (metadata fetched per fileId; grid loaded lazily on toggle)
+  const [rtDoseFileId, setRtDoseFileId] = useState(null);
+  const [doseVisible, setDoseVisible] = useState(false);
+  const [doseOpacity, setDoseOpacity] = useState(0.5);
+  const [doseThreshold, setDoseThreshold] = useState(20);
+  const [isodoseLevels, setIsodoseLevels] = useState(DEFAULT_ISODOSE_LEVELS);
+  const viewportRef = useRef(null);
+  const { doseMeta: doseData, grid: doseGrid, gridLoading, loadGrid } = useRTDose({ fileId: rtDoseFileId });
 
   // Right panel tab
   const [rightTab, setRightTab] = useState(0);
@@ -105,7 +118,7 @@ export default function StudyViewerPage() {
       // Fetch RTDOSE data
       const rtDoseFile = data.study.files?.find(f => f.modality === 'RTDOSE');
       if (rtDoseFile) {
-        fetchRTDOSE(rtDoseFile.id);
+        setRtDoseFileId(rtDoseFile.id);
       }
     } catch (err) {
       setError(err.message);
@@ -189,16 +202,8 @@ export default function StudyViewerPage() {
     }
   }
 
-  async function fetchRTDOSE(fileId) {
-    try {
-      const res = await fetch(`/api/rtdose/${fileId}`, { credentials: 'include' });
-      if (!res.ok) return;
-      const data = await res.json();
-      setDoseData(data);
-    } catch (err) {
-      console.error('Failed to fetch RTDOSE:', err);
-    }
-  }
+  // RTDOSE metadata is fetched by useRTDose when rtDoseFileId is set; the
+  // 6MB grid only downloads when the user first toggles dose display
 
   const filesForModality = useMemo(
     () => files.filter(f => f.modality === activeModality),
@@ -331,6 +336,18 @@ export default function StudyViewerPage() {
 
   function handleFileSelect(fileId) {
     setSelectedFileId(fileId);
+  }
+
+  // z (mm) of the slice currently displayed — driven by the viewport's
+  // camera events (currentImageIndex), NOT the clicked/selected file
+  const currentCTZ = filesForModality[currentImageIndex]?.image_position_z ?? null;
+
+  function handleDoseVisibleChange(nextVisible) {
+    setDoseVisible(nextVisible);
+    // Grid (~6MB) downloads on first enable; cached afterwards
+    if (nextVisible) {
+      loadGrid();
+    }
   }
 
   if (loading) {
@@ -475,6 +492,14 @@ export default function StudyViewerPage() {
               } : null}
               frameOfReferenceUID={currentCTFile?.frame_of_reference_uid}
               onSegmentVisibilityRef={handleSegmentVisibilityRef}
+              onViewportRef={handleViewportRef}
+              doseGrid={doseGrid}
+              doseMeta={doseData}
+              doseVisible={doseVisible}
+              doseOpacity={doseOpacity}
+              doseThreshold={doseThreshold}
+              doseCTZ={currentCTZ}
+              isodoseLevels={isodoseLevels}
             />
           ) : nonCtImageId ? (
             <ViewerViewport
@@ -545,7 +570,18 @@ export default function StudyViewerPage() {
               />
             )}
             {rightTab === 1 && (
-              <DosePanel doseData={doseData} />
+              <DosePanel
+                doseData={doseData}
+                visible={doseVisible}
+                opacity={doseOpacity}
+                threshold={doseThreshold}
+                gridLoading={gridLoading}
+                isodoseLevels={isodoseLevels}
+                onVisibleChange={handleDoseVisibleChange}
+                onOpacityChange={setDoseOpacity}
+                onThresholdChange={setDoseThreshold}
+                onLevelsChange={setIsodoseLevels}
+              />
             )}
           </Box>
         </Box>

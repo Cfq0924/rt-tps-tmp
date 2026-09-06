@@ -51,7 +51,8 @@ export function getStudy({ id, userId, reqId }) {
   }
 
   const files = db.prepare(`
-    SELECT id, series_instance_uid, sop_instance_uid, modality, instance_number, file_name, file_size, created_at
+    SELECT id, series_instance_uid, sop_instance_uid, modality, instance_number, file_name, file_size, created_at,
+           image_position_x, image_position_y, image_position_z, pixel_spacing_x, pixel_spacing_y, rows, columns
     FROM dicom_files
     WHERE study_id = ?
     ORDER BY modality, instance_number

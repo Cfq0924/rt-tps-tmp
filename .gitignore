@@ -8,3 +8,4 @@ test_data/
 # Agent tooling state
 ralph/
 .gstack/
+.zcode/
