@@ -266,30 +266,30 @@ export default function ViewerViewport({
     vp.scroll(currentImageIndex - vp.getCurrentImageIdIndex(), false);
   }, [isReady, currentImageIndex]);
 
-  // Track Cornerstone scroll events and notify the parent of the slice index
+  // Track slice changes and notify the parent. cornerstone 4.22's programmatic
+  // scroll() does NOT dispatch CAMERA_MODIFIED on the viewport element, so the
+  // reliable way to observe the index is a rAF poll (state updates only on
+  // change — negligible cost).
   useEffect(() => {
     if (!isReady) return;
 
-    const vp = viewportRef.current;
-    if (!vp || !onImageIndexChange) return;
+    let raf;
+    let lastKnownIndex = viewportRef.current?.getCurrentImageIdIndex?.() ?? -1;
 
-    let lastKnownIndex = vp.getCurrentImageIdIndex();
-
-    const onCameraModified = () => {
-      const currentIdx = vp.getCurrentImageIdIndex();
-      if (currentIdx !== lastKnownIndex) {
+    const tick = () => {
+      const vp = viewportRef.current;
+      const idx = vp?.getCurrentImageIdIndex?.();
+      if (typeof idx === 'number' && idx !== lastKnownIndex) {
+        lastKnownIndex = idx;
         scrollSourceRef.current = 'internal';
-        lastSetIndexRef.current = currentIdx;
-        onImageIndexChange(currentIdx);
-        lastKnownIndex = currentIdx;
+        lastSetIndexRef.current = idx;
+        onImageIndexChange?.(idx);
       }
+      raf = requestAnimationFrame(tick);
     };
+    raf = requestAnimationFrame(tick);
 
-    vp.element.addEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCameraModified);
-
-    return () => {
-      vp.element.removeEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCameraModified);
-    };
+    return () => cancelAnimationFrame(raf);
   }, [isReady, onImageIndexChange]);
 
   // Reset scroll source when parent explicitly sets currentImageIndex

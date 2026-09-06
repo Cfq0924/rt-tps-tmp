@@ -12,6 +12,7 @@ import studiesRoutes from './routes/studies.js';
 import contouringRoutes from './routes/contouring.js';
 import rtStructRoutes from './routes/rtStruct.js';
 import rtDoseRoutes from './routes/rtDose.js';
+import segmentationsRoutes from './routes/segmentations.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -83,6 +84,7 @@ app.use('/api/studies', authMiddleware, studiesRoutes);
 app.use('/api/contouring', authMiddleware, contouringRoutes);
 app.use('/api/rtstruct', authMiddleware, rtStructRoutes);
 app.use('/api/rtdose', authMiddleware, rtDoseRoutes);
+app.use('/api/segmentations', authMiddleware, segmentationsRoutes);
 
 // Error handling
 app.use(notFoundHandler);

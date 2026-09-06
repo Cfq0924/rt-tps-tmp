@@ -12,6 +12,10 @@ import StructurePanel from '../components/StructurePanel.jsx';
 import DosePanel from '../components/DosePanel.jsx';
 import { useRTDose } from '../hooks/useRTDose.js';
 import { DEFAULT_ISODOSE_LEVELS } from '../lib/doseTransform.js';
+import PaintLayer from '../modules/contouring/PaintLayer.jsx';
+import ContouringPanel from '../modules/contouring/ContouringPanel.jsx';
+import { useContouring } from '../modules/contouring/useContouring.js';
+import { RegistrationModule, EbrtModule, EvaluationModule } from '../modules/placeholders.jsx';
 import { initCornerstone } from '../initCornerstone.js';
 
 export default function StudyViewerPage() {
@@ -69,6 +73,7 @@ export default function StudyViewerPage() {
   // Callback to register the cornerstone viewport instance (for overlays)
   const handleViewportRef = useCallback((vp) => {
     viewportRef.current = vp;
+    setViewportInstance(vp);
   }, []);
 
   // RT Dose state (metadata fetched per fileId; grid loaded lazily on toggle)
@@ -82,6 +87,11 @@ export default function StudyViewerPage() {
 
   // Right panel tab
   const [rightTab, setRightTab] = useState(0);
+
+  // Functional modules (M1 imaging / M2 contouring / M3-M5 placeholders)
+  const [activeModule, setActiveModule] = useState('images');
+  const [viewportInstance, setViewportInstance] = useState(null);
+  const contouringLoadedRef = useRef(false);
 
   useEffect(() => {
     initCornerstone()
@@ -342,6 +352,43 @@ export default function StudyViewerPage() {
   // camera events (currentImageIndex), NOT the clicked/selected file
   const currentCTZ = filesForModality[currentImageIndex]?.image_position_z ?? null;
 
+  // CT geometry of the displayed slice (contouring module paint space).
+  // IOP is assumed axial HFS [1,0,0,0,1,0] — the DB does not store IOP.
+  const ctGeom = useMemo(() => {
+    const f = filesForModality[currentImageIndex];
+    if (!f || f.image_position_z == null) return null;
+    return {
+      imagePosition: {
+        x: f.image_position_x ?? 0,
+        y: f.image_position_y ?? 0,
+        z: f.image_position_z,
+      },
+      imageOrientation: { x: [1, 0, 0], y: [0, 1, 0] },
+      pixelSpacing: { i: f.pixel_spacing_x ?? 1, j: f.pixel_spacing_y ?? 1 },
+      cols: f.columns ?? 512,
+      rows: f.rows ?? 512,
+    };
+  }, [filesForModality, currentImageIndex]);
+
+  // M2 contouring module state (persistence + paint masks + undo/redo)
+  const contouring = useContouring({
+    studyId: Number(studyId),
+    ctFiles: filesForModality,
+    ctGeom,
+  });
+
+  function switchModule(mod) {
+    setActiveModule(mod);
+    if (mod === 'contouring') {
+      // the paint canvas only makes sense on the CT stack
+      if (modalities.includes('CT')) setActiveModality('CT');
+      if (!contouringLoadedRef.current) {
+        contouringLoadedRef.current = true;
+        contouring.loadFromServer();
+      }
+    }
+  }
+
   function handleDoseVisibleChange(nextVisible) {
     setDoseVisible(nextVisible);
     // Grid (~6MB) downloads on first enable; cached afterwards
@@ -362,6 +409,24 @@ export default function StudyViewerPage() {
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'background.default' }}>
       {/* Header */}
       <AppBar position="static" sx={{ background: 'background.paper', borderBottom: '1px solid rgba(88,196,220,0.12)' }} elevation={0}>
+        {/* Functional module tabs (M1-M5) */}
+        <Tabs
+          value={activeModule}
+          onChange={(_, v) => switchModule(v)}
+          variant="standard"
+          sx={{
+            minHeight: 30,
+            borderBottom: '1px solid rgba(88,196,220,0.12)',
+            '& .MuiTab-root': { minHeight: 30, fontSize: '0.65rem', fontFamily: 'mono', px: 2 },
+          }}
+        >
+          <Tab value="images" label="IMAGES" />
+          <Tab value="contouring" label="CONTOURING" />
+          <Tab value="registration" label="REGISTRATION" />
+          <Tab value="ebrt" label="EBRT PLAN" />
+          <Tab value="evaluation" label="EVALUATION" />
+        </Tabs>
+
         <Toolbar sx={{ minHeight: '48px !important', gap: 1 }}>
           <IconButton size="small" onClick={() => navigate('/patients')} sx={{ mr: 1 }}>
             <ArrowBack fontSize="small" />
@@ -376,8 +441,8 @@ export default function StudyViewerPage() {
 
           <Divider orientation="vertical" flexItem />
 
-          {/* Modality tabs */}
-          {modalities.map(mod => (
+          {/* Modality tabs (imaging module only) */}
+          {activeModule === 'images' && modalities.map(mod => (
             <Chip
               key={mod}
               label={mod}
@@ -402,12 +467,14 @@ export default function StudyViewerPage() {
           </Button>
         </Toolbar>
 
-        <ToolbarComponent activeTool={activeTool} onToolChange={setActiveTool} onAutoSegment={handleAutoSegment} />
+        {activeModule === 'images' && (
+          <ToolbarComponent activeTool={activeTool} onToolChange={setActiveTool} onAutoSegment={handleAutoSegment} />
+        )}
       </AppBar>
 
       <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* File list sidebar - only show if not CT */}
-        {activeModality !== 'CT' && (
+        {/* File list sidebar (imaging module, non-CT modalities) */}
+        {activeModule === 'images' && activeModality !== 'CT' && (
           <Box
             sx={{
               width: 220,
@@ -501,6 +568,13 @@ export default function StudyViewerPage() {
               doseCTZ={currentCTZ}
               isodoseLevels={isodoseLevels}
             />
+          ) : activeModule === 'contouring' ? (
+            /* contouring without a CT stack: hint only */
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+              <Typography color="text.secondary" variant="body2">
+                This study has no CT series to contour.
+              </Typography>
+            </Box>
           ) : nonCtImageId ? (
             <ViewerViewport
               key={`nonct-${selectedFileId}`}
@@ -533,9 +607,28 @@ export default function StudyViewerPage() {
               </Typography>
             </Box>
           )}
+
+          {/* M2 contouring paint layer (above the shared viewport) */}
+          {activeModule === 'contouring' && (
+            <PaintLayer
+              enabled
+              viewport={viewportInstance}
+              sliceIdx={currentImageIndex}
+              ctZ={currentCTZ}
+              ctGeom={ctGeom}
+              masks={contouring.masks}
+              segments={contouring.segments}
+              activeSegmentId={contouring.activeSegmentId}
+              tool={contouring.tool}
+              brushSizeMm={contouring.brushSizeMm}
+              paintVersion={contouring.paintVersion}
+              onStrokeStart={contouring.strokeStart}
+              onStrokeEnd={contouring.strokeEnd}
+            />
+          )}
         </Box>
 
-        {/* Right sidebar - Structure/Dose panels */}
+        {/* Right sidebar - per-module panels */}
         <Box
           sx={{
             width: 260,
@@ -545,45 +638,54 @@ export default function StudyViewerPage() {
             flexDirection: 'column',
           }}
         >
-          <Tabs
-            value={rightTab}
-            onChange={(_, v) => setRightTab(v)}
-            variant="fullWidth"
-            sx={{
-              minHeight: 36,
-              borderBottom: '1px solid rgba(88,196,220,0.12)',
-              '& .MuiTab-root': { minHeight: 36, fontSize: '0.7rem', fontFamily: 'mono' },
-            }}
-          >
-            <Tab label="Structures" />
-            <Tab label="Dose" />
-          </Tabs>
+          {activeModule === 'images' && (
+            <>
+              <Tabs
+                value={rightTab}
+                onChange={(_, v) => setRightTab(v)}
+                variant="fullWidth"
+                sx={{
+                  minHeight: 36,
+                  borderBottom: '1px solid rgba(88,196,220,0.12)',
+                  '& .MuiTab-root': { minHeight: 36, fontSize: '0.7rem', fontFamily: 'mono' },
+                }}
+              >
+                <Tab label="Structures" />
+                <Tab label="Dose" />
+              </Tabs>
 
-          <Box sx={{ flex: 1, overflow: 'auto' }}>
-            {rightTab === 0 && (
-              <StructurePanel
-                structures={structures}
-                onToggle={handleToggleStructure}
-                onSelect={handleSelectStructure}
-                onToggleAll={handleToggleAllStructures}
-                selectedStructureId={selectedStructureId}
-              />
-            )}
-            {rightTab === 1 && (
-              <DosePanel
-                doseData={doseData}
-                visible={doseVisible}
-                opacity={doseOpacity}
-                threshold={doseThreshold}
-                gridLoading={gridLoading}
-                isodoseLevels={isodoseLevels}
-                onVisibleChange={handleDoseVisibleChange}
-                onOpacityChange={setDoseOpacity}
-                onThresholdChange={setDoseThreshold}
-                onLevelsChange={setIsodoseLevels}
-              />
-            )}
-          </Box>
+              <Box sx={{ flex: 1, overflow: 'auto' }}>
+                {rightTab === 0 && (
+                  <StructurePanel
+                    structures={structures}
+                    onToggle={handleToggleStructure}
+                    onSelect={handleSelectStructure}
+                    onToggleAll={handleToggleAllStructures}
+                    selectedStructureId={selectedStructureId}
+                  />
+                )}
+                {rightTab === 1 && (
+                  <DosePanel
+                    doseData={doseData}
+                    visible={doseVisible}
+                    opacity={doseOpacity}
+                    threshold={doseThreshold}
+                    gridLoading={gridLoading}
+                    isodoseLevels={isodoseLevels}
+                    onVisibleChange={handleDoseVisibleChange}
+                    onOpacityChange={setDoseOpacity}
+                    onThresholdChange={setDoseThreshold}
+                    onLevelsChange={setIsodoseLevels}
+                  />
+                )}
+              </Box>
+            </>
+          )}
+
+          {activeModule === 'contouring' && <ContouringPanel contouring={contouring} />}
+          {activeModule === 'registration' && <RegistrationModule />}
+          {activeModule === 'ebrt' && <EbrtModule />}
+          {activeModule === 'evaluation' && <EvaluationModule />}
         </Box>
       </Box>
     </Box>

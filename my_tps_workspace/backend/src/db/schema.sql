@@ -61,6 +61,30 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- User-painted segments (contouring module). One row = one painted structure
+-- (ROI); its per-slice contours live in segmentation_slices.
+CREATE TABLE IF NOT EXISTS segmentations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- One row per painted slice: contours stored as JSON array of polygons,
+-- each polygon a flat [x,y,z, ...] array in patient mm (RTSTRUCT-compatible).
+CREATE TABLE IF NOT EXISTS segmentation_slices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  segmentation_id INTEGER NOT NULL REFERENCES segmentations(id) ON DELETE CASCADE,
+  sop_instance_uid TEXT NOT NULL,
+  instance_number INTEGER,
+  points_json TEXT NOT NULL,
+  UNIQUE(segmentation_id, sop_instance_uid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_segmentations_study ON segmentations(study_id);
+CREATE INDEX IF NOT EXISTS idx_segmentation_slices_seg ON segmentation_slices(segmentation_id);
+
 CREATE INDEX IF NOT EXISTS idx_dicom_files_study ON dicom_files(study_id);
 CREATE INDEX IF NOT EXISTS idx_dicom_files_series ON dicom_files(series_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_dicom_files_sop ON dicom_files(sop_instance_uid);

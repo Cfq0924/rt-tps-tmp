@@ -1,0 +1,95 @@
+import { Box, Typography, ButtonGroup, Button, Tooltip, Slider } from '@mui/material';
+import { Brush, Clear, CropSquare, Circle, Undo, Redo, Save } from '@mui/icons-material';
+import SegmentPanel from './SegmentPanel.jsx';
+
+const TOOLS = [
+  { id: 'brush', icon: <Brush fontSize="small" />, label: 'Brush' },
+  { id: 'eraser', icon: <Clear fontSize="small" />, label: 'Eraser' },
+  { id: 'rect', icon: <CropSquare fontSize="small" />, label: 'Rectangle fill' },
+  { id: 'circle', icon: <Circle fontSize="small" />, label: 'Ellipse fill' },
+];
+
+/**
+ * ContouringPanel - right panel of the contouring module: paint tools,
+ * brush size, history and the segment list. The paint layer itself renders
+ * above the shared viewport (owned by the workspace shell).
+ *
+ * @param {Object} props - the useContouring() hook result spread plus loading state
+ */
+export default function ContouringPanel({ contouring }) {
+  const c = contouring;
+
+  const toolButton = (t) => (
+    <Tooltip key={t.id} title={t.label}>
+      <Button
+        variant={c.tool === t.id ? 'contained' : 'outlined'}
+        onClick={() => c.setTool(t.id)}
+        sx={{ minWidth: 36, px: 1 }}
+      >
+        {t.icon}
+      </Button>
+    </Tooltip>
+  );
+
+  return (
+    <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
+      <Typography
+        variant="caption"
+        sx={{ px: 1, py: 0.5, color: 'text.secondary', fontFamily: 'mono',
+              borderBottom: '1px solid rgba(88,196,220,0.12)' }}
+      >
+        CONTOURING
+      </Typography>
+
+      {/* paint tools */}
+      <Box sx={{ px: 1, py: 1, display: 'flex', flexDirection: 'column', gap: 1,
+                 borderBottom: '1px solid rgba(88,196,220,0.12)' }}>
+        <ButtonGroup size="small">
+          {TOOLS.map(toolButton)}
+        </ButtonGroup>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="caption" sx={{ fontSize: '0.65rem', color: 'text.secondary', whiteSpace: 'nowrap' }}>
+            Brush: {c.brushSizeMm}mm
+          </Typography>
+          <Slider
+            size="small"
+            value={c.brushSizeMm}
+            min={1}
+            max={30}
+            step={1}
+            onChange={(_, v) => c.setBrushSizeMm(v)}
+            sx={{ color: '#58c4dc' }}
+          />
+        </Box>
+        <Box sx={{ display: 'flex', gap: 0.5 }}>
+          <Button size="small" startIcon={<Undo fontSize="small" />} disabled={!c.canUndo}
+                  onClick={c.undo} sx={{ fontSize: '0.65rem' }}>Undo</Button>
+          <Button size="small" startIcon={<Redo fontSize="small" />} disabled={!c.canRedo}
+                  onClick={c.redo} sx={{ fontSize: '0.65rem' }}>Redo</Button>
+          <Button size="small" startIcon={<Save fontSize="small" />} disabled={c.saving || !c.dirty}
+                  onClick={c.save} variant={c.dirty ? 'contained' : 'outlined'}
+                  sx={{ fontSize: '0.65rem' }}>{c.saving ? '…' : 'Save'}</Button>
+        </Box>
+      </Box>
+
+      {/* segments list (scrollable) */}
+      <Box sx={{ flex: 1, overflow: 'auto' }}>
+        <SegmentPanel
+          segments={c.segments}
+          activeSegmentId={c.activeSegmentId}
+          onAddSegment={c.addSegment}
+          onUpdateSegment={c.updateSegment}
+          onDeleteSegment={c.deleteSegment}
+          onSelectSegment={c.setActiveSegmentId}
+          onUndo={c.undo}
+          onRedo={c.redo}
+          canUndo={c.canUndo}
+          canRedo={c.canRedo}
+          onSave={c.save}
+          saving={c.saving}
+          dirty={c.dirty}
+        />
+      </Box>
+    </Box>
+  );
+}

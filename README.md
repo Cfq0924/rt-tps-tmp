@@ -88,9 +88,11 @@ npm run build
 
 - **DICOM Import**: Upload and parse DICOM files (CT, RTSTRUCT, RTDOSE)
 - **Patient Management**: Create, browse, and associate patients with DICOM data
+- **Functional modules**: IMAGES / CONTOURING / REGISTRATION / EBRT PLAN / EVALUATION workspace tabs
 - **DICOM Visualization**: Display CT images with Cornerstone3D (StackViewport)
 - **RT Structure Overlay**: Render radiation therapy structure contours on CT via Cornerstone3D segmentation
 - **RT Dose Display**: Dose heat-map overlay on CT slices (amber colormap, opacity & threshold controls) with user-editable isodose lines (add/remove/recolor/re-level, live updates); binary grid endpoint `/api/rtdose/:fileId/grid`
+- **Contouring module (M2)**: manual segmentation on CT slices — brush/eraser/rectangle/ellipse painting, per-slice masks, segment CRUD, undo/redo (20-deep), patient-space contour persistence (`/api/segmentations/*`), AI auto-segmentation hook
 - **AI Auto-Segmentation**: Integration endpoint for organ contouring (Phase 4, requires external AI service)
 
 ### Screenshots

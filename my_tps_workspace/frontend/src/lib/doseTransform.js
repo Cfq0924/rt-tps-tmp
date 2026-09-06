@@ -10,6 +10,12 @@
  * - PixelSpacing is [rowSpacing, colSpacing] = [between rows (y), between cols (x)].
  */
 
+import { projectWorldToCanvas } from './viewportCamera.js';
+
+// Shared camera projection (see lib/viewportCamera.js) — re-exported for
+// backwards compatibility with existing consumers/tests.
+export { projectWorldToCanvas };
+
 /**
  * Find the dose frame index whose z plane is closest to a CT slice z.
  * @param {number[]} gridFrameOffsetVector - per-frame z offsets (mm) relative to dose IPP.z
@@ -56,35 +62,6 @@ export function doseVoxelToPatient(i, j, k, geom) {
     ipp.y + i * colSpacing * iop.x[1] + j * rowSpacing * iop.y[1] + zOff * iop.z[1],
     ipp.z + i * colSpacing * iop.x[2] + j * rowSpacing * iop.y[2] + zOff * iop.z[2],
   ];
-}
-
-/**
- * Project a patient-space point to viewport canvas CSS coordinates using the
- * cornerstone parallel (orthographic) camera. Implemented manually because
- * StackViewport.worldToCanvas/CPU variants are state-dependent outside the
- * render loop in cornerstone 4.22 (verified: first call OK, later calls
- * return garbage/throw). getCamera() is pure data and version-stable.
- *
- * @param {Object} vp - cornerstone viewport exposing getCamera() and .element
- * @param {number[]} p - patient coordinates [x, y, z] in mm
- * @returns {{x:number, y:number}} canvas CSS coordinates
- */
-export function projectWorldToCanvas(vp, p) {
-  const cam = vp.getCamera();
-  const n = cam.viewPlaneNormal;
-  const up = cam.viewUp;
-  const right = [up[1] * n[2] - up[2] * n[1], up[2] * n[0] - up[0] * n[2], up[0] * n[1] - up[1] * n[0]];
-  const d = [p[0] - cam.focalPoint[0], p[1] - cam.focalPoint[1], p[2] - cam.focalPoint[2]];
-
-  const canvas = vp.element?.querySelector('canvas');
-  const cssW = canvas?.clientWidth ?? 0;
-  const cssH = canvas?.clientHeight ?? 0;
-  const scale = cam.parallelScale; // half-height of the view in world mm
-
-  return {
-    x: cssW / 2 + (d[0] * right[0] + d[1] * right[1] + d[2] * right[2]) / scale * (cssH / 2),
-    y: cssH / 2 - (d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) / scale * (cssH / 2),
-  };
 }
 
 /**
