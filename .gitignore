@@ -9,3 +9,6 @@ test_data/
 ralph/
 .gstack/
 .zcode/
+
+# Knowledge base stays untracked (see my_tps_workspace/.gitignore)
+WISSEN.md
