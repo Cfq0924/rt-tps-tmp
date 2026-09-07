@@ -67,18 +67,12 @@ export default function ViewerViewport({
     visibilityMapRef.current = map;
   }, [structures]);
 
-  // Render RT Structure contours via cornerstone3D native segmentation.
-  // Contours attach only after the stack is on the viewport
-  // (viewportFrameOfReferenceUID flips from null once that happened).
-  const viewportForSeg = viewportReady ? viewportRef.current : null;
-  const { setSegmentVisibility } = useRTContourSegmentation({
-    viewport: viewportForSeg,
-    frameOfReferenceUID: viewportFrameOfReferenceUID,
-    imageIds,
-    roiSequence: structures,
-    contourSequence: contours,
-    visibility: visibilityMapRef.current,
-  });
+  // RT Structure contours are displayed via RTStructSVGOverlay (deterministic
+  // SVG path, see WISSEN §12). The cornerstone contour representation is kept
+  // disabled: its annotation pipeline is fragile across StrictMode remounts
+  // and package upgrades (contours silently not rendering).
+  const viewportForSeg = null;
+  const setSegmentVisibility = null;
 
   // Expose setSegmentVisibility to parent via callback
   useEffect(() => {

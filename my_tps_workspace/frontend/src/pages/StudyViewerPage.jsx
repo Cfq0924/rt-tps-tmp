@@ -11,11 +11,17 @@ import ViewerViewport from '../components/ViewerViewport.jsx';
 import StructurePanel from '../components/StructurePanel.jsx';
 import DosePanel from '../components/DosePanel.jsx';
 import { useRTDose } from '../hooks/useRTDose.js';
+import RTStructSVGOverlay from '../components/RTStructSVGOverlay.jsx';
 import { DEFAULT_ISODOSE_LEVELS } from '../lib/doseTransform.js';
 import PaintLayer from '../modules/contouring/PaintLayer.jsx';
 import ContouringPanel from '../modules/contouring/ContouringPanel.jsx';
 import { useContouring } from '../modules/contouring/useContouring.js';
-import { RegistrationModule, EbrtModule, EvaluationModule } from '../modules/placeholders.jsx';
+import { RegistrationModule, EvaluationModule } from '../modules/placeholders.jsx';
+import EbrtWorkspace from '../modules/ebrt/EbrtWorkspace.jsx';
+import { useEbrtPlans } from '../modules/ebrt/useEbrtPlans.js';
+import { registerCTPlaneMetadataProvider } from '../lib/ctMetadataProvider.js';
+import EBRTBeamsOverlay from '../modules/ebrt/EBRTBeamsOverlay.jsx';
+import { useRTPlan } from '../hooks/useRTPlan.js';
 import { initCornerstone } from '../initCornerstone.js';
 
 export default function StudyViewerPage() {
@@ -82,8 +88,13 @@ export default function StudyViewerPage() {
   const [doseOpacity, setDoseOpacity] = useState(0.5);
   const [doseThreshold, setDoseThreshold] = useState(20);
   const [isodoseLevels, setIsodoseLevels] = useState(DEFAULT_ISODOSE_LEVELS);
+  const [rtPlanFileId, setRtPlanFileId] = useState(null);
+  const [selectedBeamNumber, setSelectedBeamNumber] = useState(null);
+  const [ebrtEnabled, setEbrtEnabled] = useState(false);
+  const ebrt = useEbrtPlans({ studyId: Number(studyId), enabled: ebrtEnabled });
   const viewportRef = useRef(null);
   const { doseMeta: doseData, grid: doseGrid, gridLoading, loadGrid } = useRTDose({ fileId: rtDoseFileId });
+  const { plan: rtPlan, loading: planLoading, error: planError } = useRTPlan({ fileId: rtPlanFileId });
 
   // Right panel tab
   const [rightTab, setRightTab] = useState(0);
@@ -130,6 +141,16 @@ export default function StudyViewerPage() {
       if (rtDoseFile) {
         setRtDoseFileId(rtDoseFile.id);
       }
+
+      // RTPLAN is parsed on demand by useRTPlan
+      const rtPlanFile = data.study.files?.find(f => f.modality === 'RTPLAN');
+      if (rtPlanFile) {
+        setRtPlanFileId(rtPlanFile.id);
+      }
+
+      // imagePlaneModule fallback so contour mapping never depends on
+      // downloaded datasets
+      registerCTPlaneMetadataProvider(data.study.files ?? []);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -321,7 +342,7 @@ export default function StudyViewerPage() {
     });
     // Also toggle the actual contour rendering
     if (segmentVisibilityToggleRef.current) {
-      segmentVisibilityToggleRef.current(roiNumber, newVisible);
+      segmentVisibilityToggleRef.current?.(roiNumber, newVisible);
     }
   }
 
@@ -339,7 +360,7 @@ export default function StudyViewerPage() {
     // Also toggle all contours in cornerstone segmentation
     if (segmentVisibilityToggleRef.current) {
       structures.forEach(s => {
-        segmentVisibilityToggleRef.current(s.roiNumber, newVisible);
+        segmentVisibilityToggleRef.current?.(s.roiNumber, newVisible);
       });
     }
   }
@@ -351,6 +372,7 @@ export default function StudyViewerPage() {
   // z (mm) of the slice currently displayed — driven by the viewport's
   // camera events (currentImageIndex), NOT the clicked/selected file
   const currentCTZ = filesForModality[currentImageIndex]?.image_position_z ?? null;
+  const currentSliceSOP = filesForModality[currentImageIndex]?.sop_instance_uid ?? null;
 
   // CT geometry of the displayed slice (contouring module paint space).
   // IOP is assumed axial HFS [1,0,0,0,1,0] — the DB does not store IOP.
@@ -370,12 +392,45 @@ export default function StudyViewerPage() {
     };
   }, [filesForModality, currentImageIndex]);
 
+  const prescriptionCgy = (() => {
+    if (ebrt.selectedPlan?.prescriptionDoseGy != null) {
+      return Math.round(ebrt.selectedPlan.prescriptionDoseGy * 100);
+    }
+    return rtPlan?.prescription?.targetPrescriptionDoseGy != null
+      ? Math.round(rtPlan.prescription.targetPrescriptionDoseGy * 100)
+      : null;
+  })();
+
   // M2 contouring module state (persistence + paint masks + undo/redo)
   const contouring = useContouring({
     studyId: Number(studyId),
     ctFiles: filesForModality,
     ctGeom,
   });
+
+  // Isocenter slice index (nearest CT slice to the plan isocenter z).
+  // Prefers the selected workspace plan; falls back to the parsed RTPLAN.
+  const isocenterZ = (() => {
+    const p = ebrt.selectedPlan;
+    if (p?.isocenterX != null) return p.isocenterZ;
+    const b = rtPlan?.beams?.find(x => x.isocenterPosition);
+    return b?.isocenterPosition?.z ?? null;
+  })();
+  const isocenterSliceIdx = (() => {
+    if (isocenterZ == null || !filesForModality.length) return null;
+    let best = 0, bestDist = Infinity;
+    filesForModality.forEach((f, i) => {
+      const d = Math.abs((f.image_position_z ?? 0) - isocenterZ);
+      if (d < bestDist) { bestDist = d; best = i; }
+    });
+    return best;
+  })();
+
+  function handleGoToIsocenter() {
+    if (isocenterSliceIdx == null) return;
+    if (activeModality !== 'CT') setActiveModality('CT');
+    setCurrentImageIndex(isocenterSliceIdx);
+  }
 
   function switchModule(mod) {
     setActiveModule(mod);
@@ -386,6 +441,11 @@ export default function StudyViewerPage() {
         contouringLoadedRef.current = true;
         contouring.loadFromServer();
       }
+    }
+    if (mod === 'ebrt') {
+      if (modalities.includes('CT')) setActiveModality('CT');
+      setEbrtEnabled(true);
+      handleGoToIsocenter();
     }
   }
 
@@ -608,6 +668,28 @@ export default function StudyViewerPage() {
             </Box>
           )}
 
+          {/* RT Structure contours as SVG (deterministic display path) */}
+          {activeModule === 'images' && activeModality === 'CT' && imageIds.length > 0 && (
+            <RTStructSVGOverlay
+              viewport={viewportInstance}
+              contours={contours}
+              structureVisibility={structureVisibility}
+              ctGeom={ctGeom}
+              sopInstanceUID={currentSliceSOP}
+              ctZ={currentCTZ}
+            />
+          )}
+
+          {/* M4 EBRT beam geometry overlay */}
+          {activeModule === 'ebrt' && (
+            <EBRTBeamsOverlay
+              viewport={viewportInstance}
+              plan={ebrt.selectedPlan ?? rtPlan}
+              selectedBeamNumber={selectedBeamNumber ?? (ebrt.selectedPlan?.beams?.[0]?.beamNumber ?? null)}
+              ctZ={currentCTZ}
+            />
+          )}
+
           {/* M2 contouring paint layer (above the shared viewport) */}
           {activeModule === 'contouring' && (
             <PaintLayer
@@ -672,6 +754,7 @@ export default function StudyViewerPage() {
                     threshold={doseThreshold}
                     gridLoading={gridLoading}
                     isodoseLevels={isodoseLevels}
+                    prescriptionCgy={prescriptionCgy}
                     onVisibleChange={handleDoseVisibleChange}
                     onOpacityChange={setDoseOpacity}
                     onThresholdChange={setDoseThreshold}
@@ -683,8 +766,14 @@ export default function StudyViewerPage() {
           )}
 
           {activeModule === 'contouring' && <ContouringPanel contouring={contouring} />}
+          {activeModule === 'ebrt' && (
+            <EbrtWorkspace
+              studyId={Number(studyId)}
+              ebrt={ebrt}
+              rtPlanFileId={rtPlanFileId}
+            />
+          )}
           {activeModule === 'registration' && <RegistrationModule />}
-          {activeModule === 'ebrt' && <EbrtModule />}
           {activeModule === 'evaluation' && <EvaluationModule />}
         </Box>
       </Box>

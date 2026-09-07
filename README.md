@@ -94,6 +94,7 @@ npm run build
 - **RT Dose Display**: Dose heat-map overlay on CT slices (amber colormap, opacity & threshold controls) with user-editable isodose lines (add/remove/recolor/re-level, live updates); binary grid endpoint `/api/rtdose/:fileId/grid`
 - **Contouring module (M2)**: manual segmentation on CT slices — brush/eraser/rectangle/ellipse painting, per-slice masks, segment CRUD, undo/redo (20-deep), patient-space contour persistence (`/api/segmentations/*`), AI auto-segmentation hook
 - **AI Auto-Segmentation**: Integration endpoint for organ contouring (Phase 4, requires external AI service)
+- **EBRT module (M4)**: plan workspace — create plans (machine/prescription/optimization & dose algorithm selection), beam management (Static/DMLC/VMAT, angles, field size, weight), RTPLAN import as editable copy, beam geometry visualization (isocenter, light-field, central axis), prescription-aware isodose labels
 
 ### Screenshots
 

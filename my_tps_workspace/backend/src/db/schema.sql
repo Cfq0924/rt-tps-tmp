@@ -85,6 +85,54 @@ CREATE TABLE IF NOT EXISTS segmentation_slices (
 CREATE INDEX IF NOT EXISTS idx_segmentations_study ON segmentations(study_id);
 CREATE INDEX IF NOT EXISTS idx_segmentation_slices_seg ON segmentation_slices(segmentation_id);
 
+-- External-beam planning: user-created plans (or editable copies imported
+-- from an RTPLAN file). One row = one plan with a single isocenter.
+CREATE TABLE IF NOT EXISTS ebrt_plans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  machine_name TEXT,
+  energy_mv REAL,
+  prescription_dose_gy REAL,
+  number_of_fractions INTEGER,
+  normalization TEXT,
+  optimization_algorithm TEXT,
+  dose_algorithm TEXT,
+  grid_size_mm REAL,
+  heterogeneity_correction INTEGER DEFAULT 0,
+  approval_status TEXT DEFAULT 'UNAPPROVED',
+  isocenter_x REAL,
+  isocenter_y REAL,
+  isocenter_z REAL,
+  source_rtplan_file_id INTEGER REFERENCES dicom_files(id),
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Beams of an EBRT plan. VMAT fields carry gantry_angle_stop in addition to
+-- the start angle; jaw coordinates are at the isocenter plane (mm).
+CREATE TABLE IF NOT EXISTS ebrt_beams (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id INTEGER NOT NULL REFERENCES ebrt_plans(id) ON DELETE CASCADE,
+  beam_number INTEGER NOT NULL,
+  name TEXT,
+  beam_type TEXT,
+  energy_mv REAL,
+  gantry_angle REAL,
+  gantry_angle_stop REAL,
+  collimator_angle REAL,
+  couch_angle REAL,
+  jaw_x1 REAL,
+  jaw_x2 REAL,
+  jaw_y1 REAL,
+  jaw_y2 REAL,
+  weight REAL DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(plan_id, beam_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ebrt_plans_study ON ebrt_plans(study_id);
+CREATE INDEX IF NOT EXISTS idx_ebrt_beams_plan ON ebrt_beams(plan_id);
+
 CREATE INDEX IF NOT EXISTS idx_dicom_files_study ON dicom_files(study_id);
 CREATE INDEX IF NOT EXISTS idx_dicom_files_series ON dicom_files(series_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_dicom_files_sop ON dicom_files(sop_instance_uid);

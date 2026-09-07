@@ -324,6 +324,114 @@ with `frame=k`, a single frame (rows×columns×4 bytes).
 
 ---
 
+## RT PLAN
+
+### `GET /rtplan/:fileId`
+
+Parse an RTPLAN file and return plan metadata, prescription, fractionation
+and per-beam geometry summaries. Requires auth (cookie).
+
+**Response** (abridged):
+```json
+{
+  "fileId": 88,
+  "rtPlanLabel": "test 9f",
+  "approvalStatus": "UNAPPROVED",
+  "referencedStructureSetSOPInstanceUID": "1.2.246.352...",
+  "prescription": {
+    "doseReferenceNumber": 1,
+    "structureType": "SITE",
+    "description": "PGTVnx",
+    "doseReferenceType": "TARGET",
+    "targetPrescriptionDoseGy": 73.92
+  },
+  "fractionation": {
+    "numberOfFractions": 33,
+    "numberOfBeams": 9,
+    "beamDosesGy": [0.249, "..."],
+    "beamMetersetsMU": [449.7, "..."]
+  },
+  "beams": [
+    {
+      "beamNumber": 1,
+      "beamName": "Field 1",
+      "treatmentMachineName": "EclipseCAP_TB",
+      "radiationType": "PHOTON",
+      "beamType": "DYNAMIC",
+      "nominalBeamEnergyMV": 6,
+      "sourceAxisDistanceMm": 1000,
+      "numberOfControlPoints": 166,
+      "gantryAngleDeg": 0,
+      "gantryArc": null,
+      "beamLimitingDeviceAngleDeg": 0,
+      "patientSupportAngleDeg": 0,
+      "isocenterPosition": { "x": -13.79, "y": -223.78, "z": -886.16 },
+      "jawPosition": { "x1": -111.125, "x2": 23.875, "y1": -152, "y2": 52 },
+      "finalCumulativeMetersetWeight": 1
+    }
+  ]
+}
+```
+
+Notes:
+- Beam geometry (angles, jaws, isocenter) is taken from control point 0 —
+  static-gantry fields carry all geometry there.
+- `gantryArc` is non-null when the gantry moves between the first and last
+  control point (arc/VMAT delivery).
+- MLC leaf positions are not extracted in v1.
+
+**Errors**:
+- `400` File is not an RTPLAN
+- `404` File not found
+
+---
+
+## EBRT Plans
+
+User-created external-beam plans (or editable copies imported from RTPLAN).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/ebrt/study/:studyId/plans` | List plans (with beam counts) |
+| `POST` | `/ebrt/study/:studyId/plans` | Create plan |
+| `POST` | `/ebrt/study/:studyId/plans/from-rtplan/:fileId` | Import RTPLAN as editable copy |
+| `GET` | `/ebrt/plans/:id` | Plan with full beams array |
+| `PATCH` | `/ebrt/plans/:id` | Update plan fields (incl. approval_status) |
+| `DELETE` | `/ebrt/plans/:id` | Delete plan (beams cascade) |
+| `POST` | `/ebrt/plans/:id/beams` | Add beam (beam_number auto-increments) |
+| `PATCH` | `/ebrt/beams/:beamId` | Update beam (response = whole plan) |
+| `DELETE` | `/ebrt/beams/:beamId` | Delete beam (response = whole plan) |
+
+**Plan object** (GET/PATCH/POST responses):
+```json
+{
+  "id": 2, "studyId": 1, "name": "test 9f",
+  "machineName": "EclipseCAP_TB", "energyMv": 6,
+  "prescriptionDoseGy": 73.92, "numberOfFractions": 33,
+  "normalization": "ISOCENTER",
+  "optimizationAlgorithm": "IMPORTED", "doseAlgorithm": "IMPORTED_RTDOSE",
+  "gridSizeMm": 2, "heterogeneityCorrection": 0,
+  "approvalStatus": "UNAPPROVED",
+  "isocenterX": -13.79, "isocenterY": -223.78, "isocenterZ": -886.16,
+  "sourceRtplanFileId": 88,
+  "beams": [ { "beamNumber": 1, "name": "Field 1", "beamType": "DMLC",
+               "gantryAngle": 0, "gantryAngleStop": null,
+               "collimatorAngle": 0, "couchAngle": 0,
+               "jawX1": -111.125, "jawX2": 23.875, "jawY1": -152, "jawY2": 52,
+               "weight": 0.111 } ]
+}
+```
+
+Notes:
+- `beam_type`: `STATIC` | `DMLC` | `VMAT`; VMAT carries `gantry_angle_stop`.
+- Angles within ±360°, jaws within ±400mm, max 32 beams per plan.
+- List rows include `beamCount` but not the beams array — fetch the single
+  plan to get beams.
+
+**Errors**: `400` validation, `404` plan/beam not found.
+
+---
+
 ## Error Responses
 
 All errors follow this format:

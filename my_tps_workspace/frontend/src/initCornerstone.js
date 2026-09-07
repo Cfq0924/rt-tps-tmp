@@ -15,6 +15,7 @@ const {
   LengthTool,
   AngleTool,
   ProbeTool,
+  PlanarFreehandContourSegmentationTool,
 } = cornerstoneTools;
 
 // Import segmentation tools from subpath exports
@@ -22,6 +23,7 @@ import RectScissorsTool from '@cornerstonejs/tools/tools/segmentation/RectangleS
 import CircleScissorsTool from '@cornerstonejs/tools/tools/segmentation/CircleScissorsTool';
 import BrushTool from '@cornerstonejs/tools/tools/segmentation/BrushTool';
 import EraserTool from '@cornerstonejs/tools/tools/AnnotationEraserTool';
+
 
 const { MouseBindings } = cornerstoneTools.Enums;
 
@@ -51,6 +53,7 @@ export async function initCornerstone() {
   async function doInit() {
     try {
       window.cornerstone = cornerstone;
+      window.cornerstoneTools = cornerstoneTools;
 
       // Initialize dicomImageLoader first (per official cornerstone3D examples)
       dicomImageLoader.init();
@@ -92,6 +95,7 @@ export async function initCornerstone() {
       cornerstoneTools.addTool(CircleScissorsTool);
       cornerstoneTools.addTool(BrushTool);
       cornerstoneTools.addTool(EraserTool);
+      cornerstoneTools.addTool(PlanarFreehandContourSegmentationTool);
 
       createDefaultToolGroup();
 
@@ -128,6 +132,7 @@ export function createDefaultToolGroup() {
   toolGroup.addTool('CircleScissor');
   toolGroup.addTool('Brush');
   toolGroup.addTool('Eraser');
+  toolGroup.addTool('PlanarFreehandContourSegmentationTool');
 
   // Set default active tool
   toolGroup.setToolActive('Pan', { bindings: [{ mouseButton: 0 }] });

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import * as cornerstone from '@cornerstonejs/core';
 import * as cornerstoneTools from '@cornerstonejs/tools';
-import dicomImageLoader from '@cornerstonejs/dicom-image-loader';
 
 const SEGMENTATION_ID = 'rtstruct-segmentation';
 
@@ -34,26 +33,19 @@ export function useRTContourSegmentation({
   const preloadStartedRef = useRef(false);
 
   /**
-   * Preload datasets (batches of 6) so the metadata provider can answer
-   * imagePlaneModule queries for contour→slice matching.
-   *
-   * IMPORTANT: uses wadouri.dataSetCacheManager.load() — NOT cornerstone's
-   * imageLoader. The image loader routes through the shared request pool,
-   * and a bulk preload there starves/stalls all other image loads (display
-   * included — observed as permanently black slices). Dataset caching is
-   * exactly what contour matching needs; image pixels are irrelevant here.
+   * Preload images (batches of 5) so their DICOM datasets are cached and
+   * metadata queries succeed
    */
   const preloadAllImages = useCallback(async (ids) => {
     if (!ids || ids.length === 0) return 0;
-    const { dataSetCacheManager } = dicomImageLoader.wadouri;
 
-    const concurrency = 6;
+    const concurrency = 5;
     let totalLoaded = 0;
 
     for (let i = 0; i < ids.length; i += concurrency) {
       const batch = ids.slice(i, i + concurrency);
       const batchResults = await Promise.allSettled(
-        batch.map(imageId => dataSetCacheManager.load(imageId.replace(/^wadouri:/, '')))
+        batch.map(imageId => cornerstone.imageLoader.loadImage(imageId))
       );
       totalLoaded += batchResults.filter(r => r.status === 'fulfilled').length;
     }

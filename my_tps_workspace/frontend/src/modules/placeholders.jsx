@@ -1,5 +1,5 @@
 import { Box, Typography, Button, List, ListItem, ListItemIcon, ListItemText } from '@mui/material';
-import { Brush, Flip, Compare, Calculate } from '@mui/icons-material';
+import { Brush, Compare, Calculate } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 
 /**
@@ -46,23 +46,6 @@ export function RegistrationModule() {
         'Multi-series support (MR/PET with CT)',
         'Rigid & deformable registration',
         'Fused overlay display',
-      ]}
-      onBack={() => navigate(`/viewer/${window.location.pathname.split('/').pop()}`)}
-    />
-  );
-}
-
-export function EbrtModule() {
-  const navigate = useNavigate();
-  return (
-    <Placeholder
-      icon={<Flip />}
-      title="EXTERNAL BEAM PLANNING (外照射)"
-      phase="Phase 2+"
-      items={[
-        'Beam arrangement & geometry',
-        'MLC / fluence editing',
-        'Dose calculation integration',
       ]}
       onBack={() => navigate(`/viewer/${window.location.pathname.split('/').pop()}`)}
     />

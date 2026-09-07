@@ -10,7 +10,7 @@ const MAX_ISODOSE_LEVELS = 12;
  * One editable isodose level row. Keeps the % as a local string while typing
  * so clearing/re-typing works, committing valid values immediately.
  */
-function IsodoseLevelRow({ level, onChange, onDelete }) {
+function IsodoseLevelRow({ level, onChange, onDelete, prescriptionCgy = null }) {
   const [draft, setDraft] = useState(String(level.pct));
 
   const commit = (raw) => {
@@ -61,7 +61,7 @@ function IsodoseLevelRow({ level, onChange, onDelete }) {
         sx={{ width: 58, '& .MuiOutlinedInput-root': { fontSize: '0.7rem' } }}
       />
       <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.6rem', flex: 1 }}>
-        %
+        %{prescriptionCgy ? ` · ${(level.pct / 100 * prescriptionCgy).toFixed(0)}cGy` : ''}
       </Typography>
       <IconButton
         size="small"
@@ -89,6 +89,7 @@ function IsodoseLevelRow({ level, onChange, onDelete }) {
  * @param {Function} props.onOpacityChange - (opacity: number 0-1) => void
  * @param {Function} props.onThresholdChange - (threshold: number 0-100) => void
  * @param {Function} props.onLevelsChange - (nextLevels: Array) => void
+ * @param {number|null} props.prescriptionCgy - prescription dose in cGy (from RTPLAN), if available
  */
 export default function DosePanel({
   doseData,
@@ -97,6 +98,7 @@ export default function DosePanel({
   threshold,
   gridLoading,
   isodoseLevels = [],
+  prescriptionCgy = null,
   onVisibleChange,
   onOpacityChange,
   onThresholdChange,
@@ -239,7 +241,7 @@ export default function DosePanel({
           ISODOSE LINES ({isodoseLevels.length})
         </Typography>
         <Typography variant="caption" sx={{ display: 'block', fontSize: '0.6rem', color: 'text.disabled', mb: 0.5 }}>
-          % of max dose — edits apply live
+          % of max dose{prescriptionCgy ? ` — Rx ${prescriptionCgy} cGy` : ''} — edits apply live
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
           {[...isodoseLevels]
