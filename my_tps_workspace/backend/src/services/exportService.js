@@ -66,7 +66,7 @@ function dicomTimeNow() {
   return `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-function patientLevelDataset(study) {
+export function patientLevelDataset(study) {
   return {
     PatientName: study.patient_name ?? '',
     PatientID: study.patient_external_id ?? '',
@@ -81,7 +81,7 @@ function patientLevelDataset(study) {
   };
 }
 
-function loadStudyMeta(db, studyId) {
+export function loadStudyMeta(db, studyId) {
   const study = db.prepare(`
     SELECT s.id, s.study_instance_uid, s.study_date, s.description,
            p.name as patient_name, p.external_id as patient_external_id,

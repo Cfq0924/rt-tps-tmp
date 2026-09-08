@@ -1,4 +1,5 @@
 import { readFile } from 'fs/promises';
+import { getDb } from '../db/init.js';
 import pkg from 'dcmjs';
 
 const { data: { DicomMessage, DicomMetaDictionary } } = pkg;
@@ -316,4 +317,63 @@ export function calculateDoseValue(pixelData, doseGridScaling, doseUnits = 'GY')
   }
 
   return result;
+}
+
+// In-memory grid cache: fileId -> { grid, rows, columns, numberOfFrames, ... }
+// The dose grid parse allocates ~30MB (32-bit source + Float32 copy); avoid
+// re-parsing the 11MB file on every request.
+const gridCache = new Map();
+const GRID_CACHE_MAX = 4;
+
+/**
+ * Load a dose file's grid in cGy with geometry (cached per fileId).
+ * Shared by the grid endpoint and the dose-sum service.
+ */
+export async function getDoseGrid(fileId, user = {}, reqId = null) {
+  if (gridCache.has(fileId)) {
+    return gridCache.get(fileId);
+  }
+
+  const db = getDb();
+  const file = db.prepare('SELECT * FROM dicom_files WHERE id = ?').get(fileId);
+  if (!file) {
+    throw Object.assign(new Error('File not found'), { status: 404 });
+  }
+  if (file.modality !== 'RTDOSE') {
+    throw Object.assign(new Error('File is not an RTDOSE'), { status: 400 });
+  }
+
+  const parsed = await parseRTDose(file.file_path);
+  const doseUnits = parsed.doseUnits;
+  const grid = calculateDoseValue(parsed.pixelData, parsed.doseGridScaling, doseUnits);
+
+  const entry = {
+    grid,
+    rows: parsed.rows,
+    columns: parsed.columns,
+    numberOfFrames: parsed.numberOfFrames,
+    imagePosition: parsed.imagePosition,
+    imageOrientation: parsed.imageOrientation,
+    pixelSpacing: parsed.pixelSpacing,
+    gridFrameOffsetVector: parsed.gridFrameOffsetVector,
+    doseUnits,
+    doseType: parsed.doseType,
+    doseSummationType: parsed.doseSummationType,
+    maxDose: computeMaxDose(grid),
+  };
+
+  if (gridCache.size >= GRID_CACHE_MAX) {
+    const oldest = gridCache.keys().next().value;
+    gridCache.delete(oldest);
+  }
+  gridCache.set(fileId, entry);
+  return entry;
+}
+
+function computeMaxDose(grid) {
+  let maxDose = 0;
+  for (let i = 0; i < grid.length; i++) {
+    if (grid[i] > maxDose) maxDose = grid[i];
+  }
+  return maxDose;
 }

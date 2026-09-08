@@ -187,6 +187,21 @@ CREATE TABLE IF NOT EXISTS series_registrations (
 
 CREATE INDEX IF NOT EXISTS idx_series_registrations_study ON series_registrations(study_id);
 
+-- Plan sums (Eclipse Ch4.16): a derived RTDOSE file produced by voxel-wise
+-- addition of two or more same-geometry dose grids. input_file_ids_json is a
+-- JSON array of the source dicom_files ids.
+CREATE TABLE IF NOT EXISTS dose_sums (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  output_file_id INTEGER REFERENCES dicom_files(id),
+  input_file_ids_json TEXT NOT NULL,
+  created_by INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_dose_sums_study ON dose_sums(study_id);
+
 CREATE INDEX IF NOT EXISTS idx_dicom_files_study ON dicom_files(study_id);
 CREATE INDEX IF NOT EXISTS idx_dicom_files_series ON dicom_files(series_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_dicom_files_sop ON dicom_files(sop_instance_uid);

@@ -559,6 +559,22 @@ The latest row per (fixed, moving) pair is the current registration.
 
 ---
 
+## Dose Sums
+
+Plan sums (Eclipse Ch4.16): voxel-wise addition of two or more same-geometry
+RTDOSE grids, written as a derived RTDOSE file (`DoseSummationType
+MULTI_PLAN`) registered in `dicom_files` — it displays, feeds DVH and exports
+like any imported dose. Different-geometry sums require registration
+resampling (Phase 4).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/dose-sums/study/:studyId` | Sum grids (`{doseFileIds: number[] (≥2, no duplicates), name}`) |
+| `GET` | `/dose-sums/study/:studyId` | List sums of a study |
+| `GET` | `/dose-sums/:id` | Fetch one |
+
+---
+
 ## Error Responses
 
 All errors follow this format:

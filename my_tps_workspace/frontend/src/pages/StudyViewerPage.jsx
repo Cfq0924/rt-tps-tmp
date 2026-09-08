@@ -22,6 +22,7 @@ import DoseProbeOverlay from '../modules/evaluation/DoseProbeOverlay.jsx';
 import { trilinearSample, findGlobalMax, voxelToPatient } from '../lib/doseSampling.js';
 import RegistrationOverlay from '../modules/registration/RegistrationOverlay.jsx';
 import RegistrationPanel from '../modules/registration/RegistrationPanel.jsx';
+import PlanSums from '../modules/doseSum/PlanSums.jsx';
 import EbrtWorkspace from '../modules/ebrt/EbrtWorkspace.jsx';
 import { useEbrtPlans } from '../modules/ebrt/useEbrtPlans.js';
 import { registerCTPlaneMetadataProvider } from '../lib/ctMetadataProvider.js';
@@ -876,19 +877,28 @@ export default function StudyViewerPage() {
                   />
                 )}
                 {rightTab === 1 && (
-                  <DosePanel
-                    doseData={doseData}
-                    visible={doseVisible}
-                    opacity={doseOpacity}
-                    threshold={doseThreshold}
-                    gridLoading={gridLoading}
-                    isodoseLevels={isodoseLevels}
-                    prescriptionCgy={prescriptionCgy}
-                    onVisibleChange={handleDoseVisibleChange}
-                    onOpacityChange={setDoseOpacity}
-                    onThresholdChange={setDoseThreshold}
-                    onLevelsChange={setIsodoseLevels}
-                  />
+                  <>
+                    <DosePanel
+                      doseData={doseData}
+                      visible={doseVisible}
+                      opacity={doseOpacity}
+                      threshold={doseThreshold}
+                      gridLoading={gridLoading}
+                      isodoseLevels={isodoseLevels}
+                      prescriptionCgy={prescriptionCgy}
+                      onVisibleChange={handleDoseVisibleChange}
+                      onOpacityChange={setDoseOpacity}
+                      onThresholdChange={setDoseThreshold}
+                      onLevelsChange={setIsodoseLevels}
+                    />
+                    <Divider sx={{ mx: 1.5, my: 0.5 }} />
+                    <PlanSums
+                      studyId={Number(studyId)}
+                      doseFiles={files.filter(f => f.modality === 'RTDOSE')}
+                      activeDoseFileId={rtDoseFileId}
+                      onSelectDoseFile={setRtDoseFileId}
+                    />
+                  </>
                 )}
               </Box>
             </>

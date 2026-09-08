@@ -1,60 +1,9 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
-import { getDicomFile } from '../services/dicomService.js';
-import { parseRTDose, calculateDoseValue, extractDoseFrame } from '../services/rtDoseService.js';
+import { getDoseGrid } from '../services/rtDoseService.js';
 
 const router = Router();
 
-// In-memory grid cache: fileId -> { grid, rows, columns, numberOfFrames, ... }
-// The dose grid parse allocates ~30MB (32-bit source + Float32 copy); avoid
-// re-parsing the 11MB file on every request.
-const gridCache = new Map();
-const GRID_CACHE_MAX = 4;
-
-async function getDoseGrid(fileId, req) {
-  if (gridCache.has(fileId)) {
-    return gridCache.get(fileId);
-  }
-
-  const file = getDicomFile({ fileId, userId: req.user.userId, reqId: req.id });
-  if (file.modality !== 'RTDOSE') {
-    throw Object.assign(new Error('File is not an RTDOSE'), { status: 400 });
-  }
-
-  const parsed = await parseRTDose(file.file_path);
-  const doseUnits = parsed.doseUnits;
-  const grid = calculateDoseValue(parsed.pixelData, parsed.doseGridScaling, doseUnits);
-
-  const entry = {
-    grid,
-    rows: parsed.rows,
-    columns: parsed.columns,
-    numberOfFrames: parsed.numberOfFrames,
-    imagePosition: parsed.imagePosition,
-    imageOrientation: parsed.imageOrientation,
-    pixelSpacing: parsed.pixelSpacing,
-    gridFrameOffsetVector: parsed.gridFrameOffsetVector,
-    doseUnits,
-    doseType: parsed.doseType,
-    doseSummationType: parsed.doseSummationType,
-    maxDose: computeMaxDose(grid),
-  };
-
-  if (gridCache.size >= GRID_CACHE_MAX) {
-    const oldest = gridCache.keys().next().value;
-    gridCache.delete(oldest);
-  }
-  gridCache.set(fileId, entry);
-  return entry;
-}
-
-function computeMaxDose(grid) {
-  let maxDose = 0;
-  for (let i = 0; i < grid.length; i++) {
-    if (grid[i] > maxDose) maxDose = grid[i];
-  }
-  return maxDose;
-}
 
 // GET /api/rtdose/:fileId - Parse RTDOSE and return dose grid metadata
 router.get('/:fileId', authMiddleware, async (req, res, next) => {
