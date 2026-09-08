@@ -220,7 +220,7 @@ function parseGridFrameOffsetVector(gfov, numberOfFrames) {
  * @param {number} pixelRepresentation - 0 = unsigned, 1 = signed
  * @returns {{data: Float32Array, bitsAllocated: number}} Raw values and the bits actually used
  */
-function extractPixelData(dataSet, rows, columns, numberOfFrames, bitsAllocated, pixelRepresentation) {
+export function extractPixelData(dataSet, rows, columns, numberOfFrames, bitsAllocated, pixelRepresentation) {
   let pixelData = dataSet.PixelData || dataSet['7fe00010'];
 
   if (!pixelData) {

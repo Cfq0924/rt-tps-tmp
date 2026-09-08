@@ -575,6 +575,17 @@ resampling (Phase 4).
 
 ---
 
+## Dose Engine (prototype)
+
+Forward dose calculation prototype (P3-M5a) — water-equivalent analytical
+model, NOT clinically validated (see docs/REPORT-DOSE-ENGINE-5A.md).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/dose-engine/study/:studyId/compute` | Compute plan dose on a reference dose geometry (`{referenceDoseFileId, planId, prescriptionCgy?}`) → stores a derived RTDOSE, returns `{doseFileId, maxDoseCgy, normalisation}` |
+
+---
+
 ## Error Responses
 
 All errors follow this format:
