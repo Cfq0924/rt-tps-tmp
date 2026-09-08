@@ -86,3 +86,13 @@ Smart Segmentation、VMAT-RapidArc、形变配准、4D、RTM、Halcyon），对�
 - 新增 Eclipse 对齐的勾画工具箱（布尔/洪泛/边界扩展/体部勾画）——
   旧计划完全未覆盖，且全部可基于自有掩模管线低成本实现。
 - 新增审批流与计划模板——TPS 与普通查看器的核心分界。
+
+---
+
+## 交付状态（2026-09）
+
+Phase 2 已全部交付（含 MPR/剂量显示持久化等遗留小项延后，见 PLAN-PHASE3）：
+M5 计划评估（DVH/点剂量/Global Max）✓ · M2 勾画工具箱（洪泛/布尔/CTV→PTV/
+体部/审批锁定）✓ · M4 EBRT 补全（参考点/审批流/模板/楔形板 Bolus）✓ ·
+M0 产品化（AUTH_DISABLED 开关/患者与研究删除）✓。
+后续路线见 **PLAN-PHASE3.md**。
