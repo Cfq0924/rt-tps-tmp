@@ -17,6 +17,7 @@ import segmentationsRoutes from './routes/segmentations.js';
 import ebrtPlansRoutes from './routes/ebrtPlans.js';
 import exportRoutes from './routes/export.js';
 import peerReviewRoutes from './routes/peerReview.js';
+import registrationRoutes from './routes/registration.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -93,6 +94,7 @@ app.use('/api/segmentations', authMiddleware, segmentationsRoutes);
 app.use('/api/ebrt', authMiddleware, ebrtPlansRoutes);
 app.use('/api/export', authMiddleware, exportRoutes);
 app.use('/api/peer-review', authMiddleware, peerReviewRoutes);
+app.use('/api/registration', authMiddleware, registrationRoutes);
 
 // Error handling
 app.use(notFoundHandler);

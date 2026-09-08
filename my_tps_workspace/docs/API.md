@@ -542,6 +542,23 @@ approval status. One OPEN session per plan; all actions are audited.
 
 ---
 
+## Registration
+
+Rigid image registrations between series (Eclipse Ch7). The matrix is 4x4
+row-major, mapping moving-series patient coordinates onto the fixed series.
+The latest row per (fixed, moving) pair is the current registration.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/registration/study/:studyId` | Save registration (`{fixedSeriesUid, movingSeriesUid, matrix, method?, notes?}`) |
+| `GET` | `/registration/study/:studyId` | List registrations (newest first) |
+| `GET` | `/registration/study/:studyId/latest?fixed=&moving=` | Latest for a pair (or `null`) |
+| `GET` | `/registration/:id` | Fetch one |
+
+`method` is `MANUAL` or `AUTO_CENTROID`.
+
+---
+
 ## Error Responses
 
 All errors follow this format:

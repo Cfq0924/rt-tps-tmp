@@ -17,10 +17,11 @@ import PaintLayer from '../modules/contouring/PaintLayer.jsx';
 import ContouringPanel from '../modules/contouring/ContouringPanel.jsx';
 import { useContouring } from '../modules/contouring/useContouring.js';
 import { imageToHU } from '../modules/contouring/paintCore.js';
-import { RegistrationModule } from '../modules/placeholders.jsx';
 import EvaluationPanel from '../modules/evaluation/EvaluationPanel.jsx';
 import DoseProbeOverlay from '../modules/evaluation/DoseProbeOverlay.jsx';
 import { trilinearSample, findGlobalMax, voxelToPatient } from '../lib/doseSampling.js';
+import RegistrationOverlay from '../modules/registration/RegistrationOverlay.jsx';
+import RegistrationPanel from '../modules/registration/RegistrationPanel.jsx';
 import EbrtWorkspace from '../modules/ebrt/EbrtWorkspace.jsx';
 import { useEbrtPlans } from '../modules/ebrt/useEbrtPlans.js';
 import { registerCTPlaneMetadataProvider } from '../lib/ctMetadataProvider.js';
@@ -94,6 +95,8 @@ export default function StudyViewerPage() {
   const [doseThreshold, setDoseThreshold] = useState(20);
   const [isodoseLevels, setIsodoseLevels] = useState(DEFAULT_ISODOSE_LEVELS);
   const [exportMenuAnchor, setExportMenuAnchor] = useState(null);
+  // P3-M2 registration: moving series + current transform (overlay)
+  const [movingState, setMovingState] = useState({ movingUid: '', files: null, movingIndex: 0, matrix: null });
   // M5 point dose probe (evaluation module)
   const [doseProbeEnabled, setDoseProbeEnabled] = useState(false);
   const [doseProbe, setDoseProbe] = useState(null); // { point, doseCgy, pctRx }
@@ -811,6 +814,19 @@ export default function StudyViewerPage() {
             />
           )}
 
+          {/* P3-M2 registration overlay: moving series with the current transform */}
+          {activeModule === 'registration' && movingState.movingUid && (
+            <RegistrationOverlay
+              viewport={viewportInstance}
+              matrix={movingState.matrix}
+              opacity={0.5}
+              movingFiles={movingState.files}
+              movingIndex={movingState.movingIndex}
+              visible
+              getSignedUrl={getSignedUrl}
+            />
+          )}
+
           {/* M5 point dose probe (evaluation module, toggled from the panel) */}
           {activeModule === 'evaluation' && (
             <DoseProbeOverlay
@@ -894,7 +910,18 @@ export default function StudyViewerPage() {
               onJumpToSlice={handleJumpToSlice}
             />
           )}
-          {activeModule === 'registration' && <RegistrationModule />}
+          {activeModule === 'registration' && (
+            <RegistrationPanel
+              studyId={Number(studyId)}
+              files={files}
+              fixedSeriesUid={filesForModality[0]?.series_instance_uid ?? ''}
+              currentSliceIdx={currentImageIndex}
+              ctGeom={ctGeom}
+              ctZ={currentCTZ}
+              getCtHuPixels={getCtPixels}
+              onMovingChange={setMovingState}
+            />
+          )}
           {activeModule === 'evaluation' && (
             <EvaluationPanel
               plan={rtPlan}

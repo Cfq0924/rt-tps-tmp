@@ -170,6 +170,23 @@ CREATE TABLE IF NOT EXISTS review_comments (
 CREATE INDEX IF NOT EXISTS idx_review_sessions_plan ON peer_review_sessions(plan_id);
 CREATE INDEX IF NOT EXISTS idx_review_comments_session ON review_comments(session_id);
 
+-- Image registration (Eclipse Ch7): rigid transforms mapping a moving
+-- series onto a fixed series in patient space (4x4 row-major, JSON).
+-- The latest row per (fixed, moving) pair is the current registration.
+CREATE TABLE IF NOT EXISTS series_registrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+  fixed_series_uid TEXT NOT NULL,
+  moving_series_uid TEXT NOT NULL,
+  matrix_json TEXT NOT NULL,
+  method TEXT NOT NULL DEFAULT 'MANUAL',
+  notes TEXT,
+  created_by INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_series_registrations_study ON series_registrations(study_id);
+
 CREATE INDEX IF NOT EXISTS idx_dicom_files_study ON dicom_files(study_id);
 CREATE INDEX IF NOT EXISTS idx_dicom_files_series ON dicom_files(series_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_dicom_files_sop ON dicom_files(sop_instance_uid);
