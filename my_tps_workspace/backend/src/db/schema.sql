@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS segmentations (
   study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   color TEXT,
+  approved INTEGER NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -104,6 +105,12 @@ CREATE TABLE IF NOT EXISTS ebrt_plans (
   isocenter_x REAL,
   isocenter_y REAL,
   isocenter_z REAL,
+  -- JSON array of {name, x, y, z} patient-mm reference points
+  reference_points TEXT,
+  -- Plan templates: is_template=1 rows are reusable prototypes; a plan
+  -- instantiated from one records its origin in source_plan_id.
+  is_template INTEGER NOT NULL DEFAULT 0,
+  source_plan_id INTEGER REFERENCES ebrt_plans(id),
   source_rtplan_file_id INTEGER REFERENCES dicom_files(id),
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -126,6 +133,8 @@ CREATE TABLE IF NOT EXISTS ebrt_beams (
   jaw_y1 REAL,
   jaw_y2 REAL,
   weight REAL DEFAULT 1,
+  wedge_angle REAL,
+  bolus TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(plan_id, beam_number)
 );

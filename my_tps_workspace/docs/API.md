@@ -77,7 +77,50 @@ Get current authenticated user.
 
 ---
 
+### `GET /auth/mode`
+
+Report whether authentication is enforced. Auth enforcement is controlled by
+the `AUTH_DISABLED` env var: `true` (default, development) → every request runs
+as the dev user; `false` (production) → JWT cookie required, `401` otherwise.
+The frontend uses this to decide between showing the login flow and going
+straight to the patient list.
+
+**Response** `200`
+```json
+{ "authDisabled": true }
+```
+
+---
+
 ## Patients
+
+### `DELETE /patients/:id`
+
+Delete a patient together with all of its studies, DICOM records
+(segmentations/plans cascade at the DB level) and best-effort unlink of the
+physical files. The UI asks for confirmation before calling this.
+
+**Response** `200`
+```json
+{ "ok": true, "deletedFiles": 90 }
+```
+
+**Errors**: `404` Patient not found
+
+---
+
+### `DELETE /studies/:id`
+
+Delete a single study and its files (best-effort physical unlink).
+
+**Response** `200`
+```json
+{ "ok": true, "deletedFiles": 87 }
+```
+
+**Errors**: `404` Study not found
+
+---
 
 ### `GET /patients`
 
@@ -386,6 +429,25 @@ Notes:
 
 ---
 
+## Segmentations (painted segments)
+
+User-painted contours from the contouring module.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/segmentations/study/:studyId` | List segments (with sliceCount) |
+| `POST` | `/segmentations/study/:studyId` | Create segment (`{name, color}`) |
+| `GET` | `/segmentations/:id` | Segment metadata |
+| `PATCH` | `/segmentations/:id` | Rename / recolor / approve (`{name?, color?, approved?}`) |
+| `DELETE` | `/segmentations/:id` | Delete segment (slices cascade) |
+| `GET` | `/segmentations/:id/contours` | All contours (`slices[].contours` = flat patient-mm polys) |
+| `PUT` | `/segmentations/:id/contours` | Replace all contours (`{slices: [{sopInstanceUID, instanceNumber?, contours}]}`) |
+
+`approved` locks a segment: the UI disables editing/deleting and the paint
+layer rejects strokes on it.
+
+---
+
 ## EBRT Plans
 
 User-created external-beam plans (or editable copies imported from RTPLAN).
@@ -401,6 +463,14 @@ User-created external-beam plans (or editable copies imported from RTPLAN).
 | `POST` | `/ebrt/plans/:id/beams` | Add beam (beam_number auto-increments) |
 | `PATCH` | `/ebrt/beams/:beamId` | Update beam (response = whole plan) |
 | `DELETE` | `/ebrt/beams/:beamId` | Delete beam (response = whole plan) |
+| `GET` | `/ebrt/templates` | List reusable plan templates |
+| `POST` | `/ebrt/plans/:id/save-as-template` | Copy plan+beams into a template (`{name?}`) |
+| `POST` | `/ebrt/templates/:id/instantiate` | Create editable plan from template (`{studyId, name?}`) |
+
+Plan-level extras: `reference_points` (PATCH/create) accepts an array of
+`{name, x, y, z}` patient-mm points (max 20) and is returned parsed as
+`referencePoints`; beams accept optional `wedge_angle` (0..360°) and `bolus`
+(free text, e.g. "5mm gel"). Templates are excluded from study plan lists.
 
 **Plan object** (GET/PATCH/POST responses):
 ```json

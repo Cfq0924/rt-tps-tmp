@@ -2,8 +2,23 @@ import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
 import { getStudy, getStudiesByPatient } from '../services/studyService.js';
 import { getDicomFilesByStudy, getRtStructForStudy } from '../services/dicomService.js';
+import { deleteStudy } from '../services/patientService.js';
 
 const router = Router();
+
+// DELETE /api/studies/:id — delete a study and its files (cascade)
+router.delete('/:id', authMiddleware, (req, res, next) => {
+  try {
+    const result = deleteStudy({
+      id: parseInt(req.params.id, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
 
 // GET /api/studies/:id — get study with files
 router.get('/:id', authMiddleware, (req, res, next) => {

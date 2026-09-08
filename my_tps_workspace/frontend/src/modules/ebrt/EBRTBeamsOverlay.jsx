@@ -112,6 +112,28 @@ export default function EBRTBeamsOverlay({
       ctx.arc(isoCanvas.x, isoCanvas.y, 3, 0, Math.PI * 2);
       ctx.stroke();
 
+      // --- reference points: circle + label on their own slice ---
+      if (Array.isArray(plan.referencePoints)) {
+        ctx.font = '10px "IBM Plex Mono", monospace';
+        for (const pt of plan.referencePoints) {
+          if (pt.x == null || Math.abs(ctZ - pt.z) > 1.5) continue;
+          const c = projectWorldToCanvas(viewport, [pt.x, pt.y, pt.z]);
+          ctx.strokeStyle = '#5cc8ff';
+          ctx.lineWidth = 1.25;
+          ctx.beginPath();
+          ctx.arc(c.x, c.y, 5, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(c.x - 8, c.y);
+          ctx.lineTo(c.x + 8, c.y);
+          ctx.moveTo(c.x, c.y - 8);
+          ctx.lineTo(c.x, c.y + 8);
+          ctx.stroke();
+          ctx.fillStyle = '#5cc8ff';
+          ctx.fillText(pt.name, c.x + 10, c.y - 6);
+        }
+      }
+
       // --- selected beam geometry on the isocenter slice ---
       if (!selected || !selected.jaw) return;
       const onIsoSlice = Math.abs(ctZ - iso.z) <= 1.5;

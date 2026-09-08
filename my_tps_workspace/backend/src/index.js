@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { requestIdMiddleware, logger } from './logging/index.js';
-import { authMiddleware } from './middleware/auth.js';
+import { authMiddleware, AUTH_DISABLED } from './middleware/auth.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import authRoutes from './routes/auth.js';
 import filesRoutes from './routes/files.js';
@@ -96,6 +96,9 @@ app.use(errorHandler);
 
 app.listen(PORT, () => {
   logger.info(`backend_started`, { port: PORT, env: process.env.NODE_ENV || 'development' });
+  if (AUTH_DISABLED) {
+    logger.warn('AUTH IS DISABLED — every request runs as the dev user. Set AUTH_DISABLED=false to enforce JWT auth.');
+  }
   console.log(`Backend running on http://localhost:${PORT}`);
 });
 

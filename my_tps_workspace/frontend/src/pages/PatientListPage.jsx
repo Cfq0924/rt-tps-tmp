@@ -6,7 +6,7 @@ import {
   Chip, IconButton, Dialog, DialogTitle, DialogContent, DialogActions,
   LinearProgress,
 } from '@mui/material';
-import { Logout, Add, FolderOpen, Upload, ExpandMore, ExpandLess } from '@mui/icons-material';
+import { Logout, Add, FolderOpen, Upload, ExpandMore, ExpandLess, Delete } from '@mui/icons-material';
 
 export default function PatientListPage() {
   const navigate = useNavigate();
@@ -20,6 +20,8 @@ export default function PatientListPage() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
   const [expandedPatients, setExpandedPatients] = useState({});
+  const [deleteTarget, setDeleteTarget] = useState(null); // patient pending deletion
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     fetchPatients();
@@ -35,6 +37,21 @@ export default function PatientListPage() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDeletePatient() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/patients/${deleteTarget.id}`, { method: 'DELETE', credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to delete patient');
+      setPatients(prev => prev.filter(p => p.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -218,6 +235,13 @@ export default function PatientListPage() {
                         <IconButton size="small" onClick={() => navigate(`/patients/${patient.id}`)}>
                           <FolderOpen fontSize="small" />
                         </IconButton>
+                        <IconButton
+                          size="small"
+                          aria-label={`patient-delete-${patient.name}`}
+                          onClick={(e) => { e.stopPropagation(); setDeleteTarget(patient); }}
+                        >
+                          <Delete fontSize="small" sx={{ color: 'text.secondary' }} />
+                        </IconButton>
                       </TableCell>
                     </TableRow>
                   </>
@@ -294,6 +318,26 @@ export default function PatientListPage() {
             startIcon={<Upload />}
           >
             {uploading ? 'Importing...' : `Import ${selectedFiles.length} Files`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Patient Confirmation */}
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)}>
+        <DialogTitle>Delete patient?</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontSize: '0.875rem' }}>
+            {deleteTarget && (
+              <>This permanently removes <strong>{deleteTarget.name}</strong> ({deleteTarget.external_id})
+              with {deleteTarget.study_count} stud{deleteTarget.study_count === 1 ? 'y' : 'ies'} and
+              {' '}{deleteTarget.file_count} DICOM file{deleteTarget.file_count === 1 ? '' : 's'}. This cannot be undone.</>
+            )}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
+          <Button onClick={handleDeletePatient} color="error" variant="contained" disabled={deleting}>
+            {deleting ? 'Deleting…' : 'Delete'}
           </Button>
         </DialogActions>
       </Dialog>

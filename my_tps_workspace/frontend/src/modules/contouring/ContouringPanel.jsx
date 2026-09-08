@@ -1,10 +1,11 @@
-import { Box, Typography, ButtonGroup, Button, Tooltip, Slider } from '@mui/material';
-import { Brush, Clear, CropSquare, Circle, Undo, Redo, Save } from '@mui/icons-material';
+import { Box, Typography, ButtonGroup, Button, Tooltip, Slider, TextField, Divider } from '@mui/material';
+import { Brush, Clear, CropSquare, Circle, Undo, Redo, Save, FormatColorFill, AutoFixHigh, OpenInFull } from '@mui/icons-material';
 import SegmentPanel from './SegmentPanel.jsx';
 
 const TOOLS = [
   { id: 'brush', icon: <Brush fontSize="small" />, label: 'Brush' },
   { id: 'eraser', icon: <Clear fontSize="small" />, label: 'Eraser' },
+  { id: 'floodfill', icon: <FormatColorFill fontSize="small" />, label: 'Flood fill (HU)' },
   { id: 'rect', icon: <CropSquare fontSize="small" />, label: 'Rectangle fill' },
   { id: 'circle', icon: <Circle fontSize="small" />, label: 'Ellipse fill' },
 ];
@@ -14,14 +15,15 @@ const TOOLS = [
  * brush size, history and the segment list. The paint layer itself renders
  * above the shared viewport (owned by the workspace shell).
  *
- * @param {Object} props - the useContouring() hook result spread plus loading state
+ * @param {Object} props - the useContouring() hook result plus slice helpers
  */
-export default function ContouringPanel({ contouring }) {
+export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
   const c = contouring;
 
   const toolButton = (t) => (
     <Tooltip key={t.id} title={t.label}>
       <Button
+        aria-label={`tool-${t.id}`}
         variant={c.tool === t.id ? 'contained' : 'outlined'}
         onClick={() => c.setTool(t.id)}
         sx={{ minWidth: 36, px: 1 }}
@@ -69,6 +71,34 @@ export default function ContouringPanel({ contouring }) {
           <Button size="small" startIcon={<Save fontSize="small" />} disabled={c.saving || !c.dirty}
                   onClick={c.save} variant={c.dirty ? 'contained' : 'outlined'}
                   sx={{ fontSize: '0.65rem' }}>{c.saving ? '…' : 'Save'}</Button>
+        </Box>
+
+        <Divider sx={{ my: 0.5 }} />
+
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+          <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary', fontFamily: 'mono' }}>
+            STRUCTURE OPS (active segment)
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <TextField size="small" label="Margin (mm)" defaultValue={3}
+                       id="expand-margin-input" inputProps={{ style: { fontSize: '0.65rem' } }} />
+            <Button size="small" variant="outlined" startIcon={<OpenInFull fontSize="small" />}
+                    onClick={() => {
+                      const el = document.getElementById('expand-margin-input');
+                      const mm = Number(el?.value) || 3;
+                      c.expandActive(mm, Math.max(1, Math.round(mm / 3)));
+                    }}
+                    sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+              CTV→PTV
+            </Button>
+            <Tooltip title="Auto body contour on the displayed slice">
+              <Button size="small" variant="outlined" startIcon={<AutoFixHigh fontSize="small" />}
+                      onClick={() => c.autoBodyOnSlice(sliceIdx, getCtPixels?.() ?? null)}
+                      sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                Body
+              </Button>
+            </Tooltip>
+          </Box>
         </Box>
       </Box>
 

@@ -1,5 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { maskToPolygons, polygonsToMask, imagePixelToPatient, patientToImagePixel } from './paintCore.js';
+import {
+  maskToPolygons,
+  polygonsToMask,
+  imagePixelToPatient,
+  patientToImagePixel,
+  floodFillHU,
+  booleanOp,
+  expandMask3D,
+  autoBodyMask,
+} from './paintCore.js';
 
 /**
  * Contouring module state: segments, per-segment per-slice masks, undo/redo
@@ -124,7 +133,7 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
           if (mask.some(v => v === 1)) sliceMap.set(idx, mask);
         }
         masksRef.current.set(meta.id, sliceMap);
-        nextSegments.push({ id: meta.id, name: meta.name, color: meta.color || '#5cc8ff', visible: true });
+        nextSegments.push({ id: meta.id, name: meta.name, color: meta.color || '#5cc8ff', visible: true, approved: !!meta.approved });
       }
       setSegments(nextSegments);
       setActiveSegmentId(nextSegments[0]?.id ?? null);
@@ -156,8 +165,8 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
   const updateSegment = useCallback((id, patch) => {
     setSegments(prev => prev.map(s => (s.id === id ? { ...s, ...patch } : s)));
     setDirty(true);
-    // persist rename/recolor immediately (cheap PATCH)
-    if (patch.name !== undefined || patch.color !== undefined) {
+    // persist rename/recolor/approval immediately (cheap PATCH)
+    if (patch.name !== undefined || patch.color !== undefined || patch.approved !== undefined) {
       fetch(`/api/segmentations/${id}`, {
         method: 'PATCH',
         credentials: 'include',
@@ -226,14 +235,78 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     }
   }, [segments, serializeSegment]);
 
+
+  const activeSegment = () => segments.find(s => s.id === activeSegmentId) ?? null;
+
+  /** Flood fill on the active segment at a seed (image pixel coords). */
+  const floodFillAt = useCallback((sliceIdx, seed, huTolerance, ctPixels) => {
+    const seg = activeSegment();
+    if (!seg || seg.approved) return;
+    strokeStart(sliceIdx);
+    const mask = getMask(seg.id, sliceIdx);
+    floodFillHU(ctPixels, mask, ctGeom.cols, ctGeom.rows, Math.floor(seed.i), Math.floor(seed.j), huTolerance, 1);
+    strokeEnd();
+  }, [activeSegmentId, ctGeom, getMask, strokeStart, strokeEnd]);
+
+  /** Boolean op of a source segment's mask INTO the active segment (all shared slices). */
+  const applyBoolean = useCallback((sourceSegId, op) => {
+    const seg = activeSegment();
+    if (!seg || seg.approved || sourceSegId === activeSegmentId) return;
+    strokeStart(0);
+    const srcMap = masksRef.current.get(sourceSegId);
+    const dstMap = masksRef.current.get(activeSegmentId);
+    if (srcMap && dstMap) {
+      for (const [sliceIdx, dst] of dstMap) {
+        const src = srcMap.get(sliceIdx);
+        if (src) booleanOp(dst, src, op);
+      }
+    }
+    strokeEnd();
+  }, [activeSegmentId, strokeStart, strokeEnd]);
+
+  /** Expand the active segment by marginMm in-plane and zLayers slices. */
+  const expandActive = useCallback((marginMm, zLayers) => {
+    const seg = activeSegment();
+    if (!seg || seg.approved || !ctGeom) return;
+    strokeStart(0);
+    const marginPx = Math.max(1, marginMm / (ctGeom.pixelSpacing.j || 1));
+    const sliceMap = masksRef.current.get(activeSegmentId);
+    if (sliceMap) {
+      const indices = [...sliceMap.keys()];
+      const lo = Math.min(...indices) - zLayers, hi = Math.max(...indices) + zLayers;
+      for (let s = lo; s <= hi; s++) {
+        if (s < 0) continue;
+        if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
+        const m = sliceMap.get(s);
+        expandMask3D(m, ctGeom.cols, ctGeom.rows, marginPx, 0,
+          (dz) => sliceMap.get(s + dz), (dz, mm) => sliceMap.set(s + dz, mm));
+      }
+    }
+    strokeEnd();
+  }, [activeSegmentId, ctGeom, strokeStart, strokeEnd]);
+
+  /** Auto body contour into the active segment on the displayed slice. */
+  const autoBodyOnSlice = useCallback((sliceIdx, ctPixels) => {
+    const seg = activeSegment();
+    if (!seg || seg.approved || !ctPixels) return;
+    strokeStart(sliceIdx);
+    const mask = getMask(seg.id, sliceIdx);
+    const body = autoBodyMask(ctPixels, ctGeom.cols, ctGeom.rows);
+    mask.set(body);
+    strokeEnd();
+  }, [activeSegmentId, ctGeom, getMask, strokeStart, strokeEnd]);
+
+  const activeSegmentApproved = !!(segments.find(s => s.id === activeSegmentId)?.approved);
+
   return {
-    segments, activeSegmentId, setActiveSegmentId,
+    segments, activeSegmentId, setActiveSegmentId, activeSegmentApproved,
     masks: masksRef.current,
     tool, setTool, brushSizeMm, setBrushSizeMm,
     paintVersion, bump,
     dirty, saving, loading, loadError,
     canUndo: historyInfo.canUndo, canRedo: historyInfo.canRedo,
     strokeStart, strokeEnd, undo, redo,
+    floodFillAt, applyBoolean, expandActive, autoBodyOnSlice,
     addSegment, updateSegment, deleteSegment, save,
     loadFromServer, getMask,
   };

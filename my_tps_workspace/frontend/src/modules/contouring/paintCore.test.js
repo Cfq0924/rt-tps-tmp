@@ -13,6 +13,12 @@ import {
   pushSnapshot,
   undo,
   redo,
+  floodFillHU,
+  booleanOp,
+  expandMask3D,
+  keepLargestComponent,
+  autoBodyMask,
+  imageToHU,
 } from './paintCore.js';
 
 const COLS = 20;
@@ -195,5 +201,122 @@ describe('undo/redo history', () => {
     expect(h.future.length).toBe(1);
     pushSnapshot(h, 0, cur); // new edit after undo
     expect(h.future.length).toBe(0);
+  });
+});
+
+
+describe('floodFillHU', () => {
+  it('fills a connected region of similar HU', () => {
+    const ct = new Int16Array(100).fill(-1000);
+    // an air pocket atHU 0
+    [12, 13, 14, 22, 23, 24, 32, 33, 34].forEach(i => ct[i] = 0);
+    const mask = new Uint8Array(100);
+    const n = floodFillHU(ct, mask, 10, 10, 2, 1, 50, 1);
+    expect(n).toBe(9);
+    expect(mask[13]).toBe(1);
+    expect(mask[0]).toBe(0);
+  });
+
+  it('stops at an intensity wall (HU tolerance)', () => {
+    const ct = new Int16Array(100).fill(-1000);
+    // zero-HU wall down column 3: fill from the left cannot cross it
+    for (let j = 0; j < 10; j++) ct[j * 10 + 3] = 0;
+    const mask = new Uint8Array(100);
+    const n = floodFillHU(ct, mask, 10, 10, 1, 1, 50, 1);
+    // left region: columns 0-2 → 30 voxels
+    expect(n).toBe(30);
+    expect(mask[1]).toBe(1);
+    expect(mask[5]).toBe(0); // right of the wall stays unfilled
+  });
+});
+
+describe('booleanOp', () => {
+  it('union / subtract / intersect', () => {
+    const a = new Uint8Array(10), b = new Uint8Array(10);
+    [0, 1, 2, 3].forEach(i => a[i] = 1);
+    [2, 3, 4].forEach(i => b[i] = 1);
+    const u = a.slice(); booleanOp(u, b, 'union');
+    expect([...u].filter(Boolean).length).toBe(5);
+    const s = a.slice(); booleanOp(s, b, 'subtract');
+    expect([s[0], s[1], s[2], s[3]]).toEqual([1, 1, 0, 0]);
+    const x = a.slice(); booleanOp(x, b, 'intersect');
+    expect([x[2], x[3]]).toEqual([1, 1]);
+    expect([x[0], x[4]]).toEqual([0, 0]);
+  });
+});
+
+describe('expandMask3D', () => {
+  it('dilates in-plane and propagates to neighbor slices', () => {
+    const cols = 10, rows = 10;
+    const slice = new Uint8Array(100);
+    slice[5 * cols + 5] = 1;
+    const slices = { '-1': new Uint8Array(100), '0': slice, '1': new Uint8Array(100) };
+    expandMask3D(
+      slice, cols, rows, 2, 1,
+      (dz) => slices[dz] ?? null,
+      (dz, m) => { slices[dz] = m; }
+    );
+    // in-plane dilation radius 2 around (5,5)
+    expect(slice[5 * cols + 7]).toBe(1);
+    expect(slice[3 * cols + 5]).toBe(1);
+    expect(slice[5 * cols + 3]).toBe(1);
+    // z propagation: neighbor slices got the dilated shape
+    expect(slices['1'][5 * cols + 5]).toBe(1);
+    expect(slices['-1'][5 * cols + 5]).toBe(1);
+  });
+});
+
+describe('keepLargestComponent', () => {
+  it('keeps only the largest connected blob', () => {
+    const mask = new Uint8Array(100);
+    [0, 1, 10, 11].forEach(i => mask[i] = 1);        // blob A: 4 voxels
+    [55, 56, 57, 65, 66, 67, 75, 76, 77].forEach(i => mask[i] = 1); // blob B: 9
+    const kept = keepLargestComponent(mask, 10, 10);
+    expect(kept).toBe(9);
+    expect(mask[0]).toBe(0);
+    expect(mask[55]).toBe(1);
+  });
+
+  it('handles a single component', () => {
+    const mask = new Uint8Array(100);
+    [0, 1, 2].forEach(i => mask[i] = 1);
+    keepLargestComponent(mask, 10, 10);
+    expect(mask[0]).toBe(1);
+  });
+});
+
+describe('autoBodyMask', () => {
+  it('thresholds HU and keeps the patient body', () => {
+    const ct = new Int16Array(100).fill(-1000); // air
+    // body blob at HU 0
+    [34, 35, 36, 44, 45, 46, 54, 55, 56].forEach(i => ct[i] = 0);
+    // a separate high-density speck (bone fragment) — removed by largest CC
+    ct[2] = 500;
+    const mask = autoBodyMask(ct, 10, 10);
+    expect(mask[45]).toBe(1);
+    expect(mask[2]).toBe(0); // isolated speck dropped
+    expect(mask[0]).toBe(0);
+  });
+});
+describe('imageToHU', () => {
+  it('applies rescale slope and intercept', () => {
+    const stored = new Uint16Array([0, 1024, 2048]);
+    const img = { getPixelData: () => stored, slope: 1, intercept: -1024 };
+    const hu = imageToHU(img);
+    expect(hu[0]).toBe(-1024); // air
+    expect(hu[1]).toBe(0);     // water
+    expect(hu[2]).toBe(1024);  // dense bone
+  });
+
+  it('defaults to slope 1 / intercept 0 when missing', () => {
+    const img = { getPixelData: () => new Float32Array([7, -3]) };
+    const hu = imageToHU(img);
+    expect(hu[0]).toBe(7);
+    expect(hu[1]).toBe(-3);
+  });
+
+  it('handles fractional slope', () => {
+    const img = { getPixelData: () => new Uint16Array([100]), slope: 0.5, intercept: -1024 };
+    expect(imageToHU(img)[0]).toBeCloseTo(-974);
   });
 });

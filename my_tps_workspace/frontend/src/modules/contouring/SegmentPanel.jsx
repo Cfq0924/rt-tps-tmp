@@ -1,5 +1,5 @@
 import { Box, Typography, Checkbox, IconButton, Button, TextField, Tooltip } from '@mui/material';
-import { Add, Delete, Undo, Redo, Save, Layers } from '@mui/icons-material';
+import { Add, Delete, Undo, Redo, Save, Layers, Lock, LockOpen } from '@mui/icons-material';
 
 const SEGMENT_PALETTE = ['#ff5c5c', '#ff9f43', '#f6c177', '#9ae66e', '#5cc8ff', '#c792ea'];
 
@@ -101,7 +101,7 @@ export default function SegmentPanel({
         {segments.map(seg => (
           <Box
             key={seg.id}
-            onClick={() => onSelectSegment(seg.id)}
+            onClick={() => !seg.approved && onSelectSegment(seg.id)}
             sx={{
               display: 'flex',
               alignItems: 'center',
@@ -109,10 +109,11 @@ export default function SegmentPanel({
               px: 0.75,
               py: 0.25,
               borderRadius: 0.5,
-              cursor: 'pointer',
+              cursor: seg.approved ? 'default' : 'pointer',
               border: '1px solid',
               borderColor: seg.id === activeSegmentId ? 'rgba(88,196,220,0.6)' : 'transparent',
               bgcolor: seg.id === activeSegmentId ? 'rgba(88,196,220,0.08)' : 'transparent',
+              opacity: seg.approved ? 0.75 : 1,
             }}
           >
             <Checkbox
@@ -128,14 +129,28 @@ export default function SegmentPanel({
               value={seg.name}
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => onUpdateSegment(seg.id, { name: e.target.value })}
+              disabled={seg.approved}
               size="small"
               fullWidth
               inputProps={{ 'aria-label': `segment-name-${seg.name}`, style: { fontSize: '0.7rem', padding: '1px 4px' } }}
               sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.7rem' } }}
             />
+            <Tooltip title={seg.approved ? 'Approved — click to unlock' : 'Approve (locks this segment)'}>
+              <IconButton
+                size="small"
+                sx={{ p: 0.25 }}
+                onClick={(e) => { e.stopPropagation(); onUpdateSegment(seg.id, { approved: !seg.approved }); }}
+                aria-label={`segment-approve-${seg.name}`}
+              >
+                {seg.approved
+                  ? <Lock sx={{ fontSize: 13, color: '#f6c177' }} />
+                  : <LockOpen sx={{ fontSize: 13, color: 'text.secondary' }} />}
+              </IconButton>
+            </Tooltip>
             <IconButton
               size="small"
               sx={{ p: 0.25 }}
+              disabled={seg.approved}
               onClick={(e) => { e.stopPropagation(); onDeleteSegment(seg.id); }}
               aria-label={`segment-delete-${seg.name}`}
             >

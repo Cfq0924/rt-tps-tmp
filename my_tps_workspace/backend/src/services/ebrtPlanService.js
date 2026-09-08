@@ -50,7 +50,34 @@ export function validateBeamPayload(b = {}) {
   }
   const w = num(b.weight, 1);
   if (w !== null && w < 0) return 'weight must be >= 0';
+  const wedge = num(b.wedge_angle);
+  if (wedge !== null && (wedge < 0 || wedge > 360)) return 'wedge_angle must be within 0..360°';
+  if (b.bolus !== undefined && b.bolus !== null && typeof b.bolus !== 'string') return 'bolus must be a string';
   return null;
+}
+
+const MAX_REFERENCE_POINTS = 20;
+
+/**
+ * Validate a reference-points payload: array of {name, x, y, z} in patient mm.
+ * @returns {error: string|null, value: string|null} normalized JSON or null
+ */
+export function validateReferencePoints(points) {
+  if (points === undefined || points === null) return { error: null, value: null };
+  if (!Array.isArray(points)) return { error: 'reference_points must be an array', value: null };
+  if (points.length > MAX_REFERENCE_POINTS) {
+    return { error: `too many reference points (max ${MAX_REFERENCE_POINTS})`, value: null };
+  }
+  const normalized = [];
+  for (const pt of points) {
+    if (!pt || !str(pt.name)) return { error: 'each reference point needs a name', value: null };
+    const coords = [pt.x, pt.y, pt.z].map(v => num(v));
+    if (coords.some(c => c === null)) {
+      return { error: 'reference point x/y/z must be numeric', value: null };
+    }
+    normalized.push({ name: str(pt.name), x: coords[0], y: coords[1], z: coords[2] });
+  }
+  return { error: null, value: JSON.stringify(normalized) };
 }
 
 const PLAN_SELECT = `
@@ -59,6 +86,7 @@ const PLAN_SELECT = `
          normalization, optimization_algorithm as optimizationAlgorithm, dose_algorithm as doseAlgorithm,
          grid_size_mm as gridSizeMm, heterogeneity_correction as heterogeneityCorrection,
          approval_status as approvalStatus, isocenter_x as isocenterX, isocenter_y as isocenterY, isocenter_z as isocenterZ,
+         reference_points as referencePointsJson, is_template as isTemplate, source_plan_id as sourcePlanId,
          source_rtplan_file_id as sourceRtplanFileId, created_at as createdAt
   FROM ebrt_plans`;
 
@@ -67,14 +95,27 @@ function getPlanWithBeams(db, id) {
   if (!plan) {
     throw Object.assign(new Error('EBRT plan not found'), { status: 404 });
   }
+  plan.referencePoints = parseReferencePoints(plan.referencePointsJson);
+  delete plan.referencePointsJson;
   plan.beams = db.prepare(`
     SELECT id, plan_id as planId, beam_number as beamNumber, name, beam_type as beamType,
            energy_mv as energyMv, gantry_angle as gantryAngle, gantry_angle_stop as gantryAngleStop,
            collimator_angle as collimatorAngle, couch_angle as couchAngle,
-           jaw_x1 as jawX1, jaw_x2 as jawX2, jaw_y1 as jawY1, jaw_y2 as jawY2, weight
+           jaw_x1 as jawX1, jaw_x2 as jawX2, jaw_y1 as jawY1, jaw_y2 as jawY2, weight,
+           wedge_angle as wedgeAngle, bolus
     FROM ebrt_beams WHERE plan_id = ? ORDER BY beam_number
   `).all(id);
   return plan;
+}
+
+function parseReferencePoints(json) {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
 }
 
 export function listPlans({ studyId, userId, reqId }) {
@@ -85,9 +126,10 @@ export function listPlans({ studyId, userId, reqId }) {
            normalization, optimization_algorithm as optimizationAlgorithm, dose_algorithm as doseAlgorithm,
            grid_size_mm as gridSizeMm, heterogeneity_correction as heterogeneityCorrection,
            approval_status as approvalStatus, isocenter_x as isocenterX, isocenter_y as isocenterY, isocenter_z as isocenterZ,
+           is_template as isTemplate, source_plan_id as sourcePlanId,
            source_rtplan_file_id as sourceRtplanFileId, created_at as createdAt,
            (SELECT COUNT(*) FROM ebrt_beams b WHERE b.plan_id = ebrt_plans.id) as beamCount
-    FROM ebrt_plans WHERE study_id = ? ORDER BY created_at DESC, id DESC
+    FROM ebrt_plans WHERE study_id = ? AND is_template = 0 ORDER BY created_at DESC, id DESC
   `).all(studyId);
 
   auditLog(db, { reqId, userId, action: 'list_ebrt_plans', resourceType: 'ebrt_plan', metadata: { studyId, count: rows.length } });
@@ -105,12 +147,15 @@ export function createPlan({ studyId, payload = {}, userId, reqId }) {
   const error = validatePlanPayload(payload);
   if (error) throw Object.assign(new Error(error), { status: 400 });
 
+  const refPts = validateReferencePoints(payload.reference_points);
+  if (refPts.error) throw Object.assign(new Error(refPts.error), { status: 400 });
+
   const db = getDb();
   const info = db.prepare(`
     INSERT INTO ebrt_plans (study_id, name, machine_name, energy_mv, prescription_dose_gy,
       number_of_fractions, normalization, optimization_algorithm, dose_algorithm,
-      grid_size_mm, heterogeneity_correction, isocenter_x, isocenter_y, isocenter_z)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      grid_size_mm, heterogeneity_correction, isocenter_x, isocenter_y, isocenter_z, reference_points)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     studyId,
     str(payload.name),
@@ -125,7 +170,8 @@ export function createPlan({ studyId, payload = {}, userId, reqId }) {
     payload.heterogeneity_correction ? 1 : 0,
     num(payload.isocenter_x, 0),
     num(payload.isocenter_y, 0),
-    num(payload.isocenter_z, 0)
+    num(payload.isocenter_z, 0),
+    refPts.value
   );
 
   auditLog(db, { reqId, userId, action: 'create_ebrt_plan', resourceType: 'ebrt_plan', resourceId: info.lastInsertRowid, metadata: { studyId, name: payload.name } });
@@ -138,6 +184,7 @@ const UPDATABLE_PLAN_FIELDS = new Set([
   'name', 'machine_name', 'energy_mv', 'prescription_dose_gy', 'number_of_fractions',
   'normalization', 'optimization_algorithm', 'dose_algorithm', 'grid_size_mm',
   'heterogeneity_correction', 'approval_status', 'isocenter_x', 'isocenter_y', 'isocenter_z',
+  'reference_points',
 ]);
 
 export function updatePlan({ id, payload = {}, userId, reqId }) {
@@ -149,6 +196,13 @@ export function updatePlan({ id, payload = {}, userId, reqId }) {
     if (k === 'name' && !str(v)) throw Object.assign(new Error('name cannot be empty'), { status: 400 });
     if (k === 'approval_status' && !['UNAPPROVED', 'REVIEWED', 'APPROVED'].includes(v)) {
       throw Object.assign(new Error('invalid approval_status'), { status: 400 });
+    }
+    if (k === 'reference_points') {
+      const refPts = validateReferencePoints(v);
+      if (refPts.error) throw Object.assign(new Error(refPts.error), { status: 400 });
+      updates.push(`${k} = ?`);
+      values.push(refPts.value);
+      continue;
     }
     updates.push(`${k} = ?`);
     values.push(k === 'heterogeneity_correction' ? (v ? 1 : 0) : v);
@@ -188,8 +242,9 @@ export function addBeam({ planId, payload = {}, userId, reqId }) {
 
   const info = db.prepare(`
     INSERT INTO ebrt_beams (plan_id, beam_number, name, beam_type, energy_mv, gantry_angle,
-      gantry_angle_stop, collimator_angle, couch_angle, jaw_x1, jaw_x2, jaw_y1, jaw_y2, weight)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      gantry_angle_stop, collimator_angle, couch_angle, jaw_x1, jaw_x2, jaw_y1, jaw_y2, weight,
+      wedge_angle, bolus)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     planId,
     nextNumber,
@@ -202,7 +257,9 @@ export function addBeam({ planId, payload = {}, userId, reqId }) {
     num(payload.couch_angle, 0),
     num(payload.jaw_x1, -50), num(payload.jaw_x2, 50),
     num(payload.jaw_y1, -50), num(payload.jaw_y2, 50),
-    num(payload.weight, 1)
+    num(payload.weight, 1),
+    num(payload.wedge_angle),
+    str(payload.bolus)
   );
 
   auditLog(db, { reqId, userId, action: 'add_ebrt_beam', resourceType: 'ebrt_beam', resourceId: info.lastInsertRowid, metadata: { planId, beamNumber: nextNumber } });
@@ -220,7 +277,8 @@ export function updateBeam({ beamId, payload = {}, userId, reqId }) {
   if (error) throw Object.assign(new Error(error), { status: 400 });
 
   const allowed = ['name', 'beam_type', 'energy_mv', 'gantry_angle', 'gantry_angle_stop',
-    'collimator_angle', 'couch_angle', 'jaw_x1', 'jaw_x2', 'jaw_y1', 'jaw_y2', 'weight'];
+    'collimator_angle', 'couch_angle', 'jaw_x1', 'jaw_x2', 'jaw_y1', 'jaw_y2', 'weight',
+    'wedge_angle', 'bolus'];
   const updates = [];
   const values = [];
   for (const k of allowed) {
@@ -322,4 +380,120 @@ export async function createPlanFromRTPlan({ studyId, fileId, userId, reqId }) {
 function fractionDoseForBeam(parsed, beamNumber) {
   const i = parsed.beams.findIndex(b => b.beamNumber === beamNumber);
   return parsed.fractionation.beamDosesGy[i] ?? null;
+}
+
+/**
+ * Copy a plan (with beams) into a reusable template: is_template=1.
+ * The template keeps the origin study for audit purposes but is listed
+ * study-independently.
+ */
+export function savePlanAsTemplate({ planId, name, userId, reqId }) {
+  const db = getDb();
+  const src = getPlanWithBeams(db, planId);
+  const templateName = str(name) || `${src.name} template`;
+
+  const info = db.prepare(`
+    INSERT INTO ebrt_plans (study_id, name, machine_name, energy_mv, prescription_dose_gy,
+      number_of_fractions, normalization, optimization_algorithm, dose_algorithm,
+      grid_size_mm, heterogeneity_correction, approval_status, isocenter_x, isocenter_y, isocenter_z,
+      reference_points, is_template, source_plan_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UNAPPROVED', ?, ?, ?, ?, 1, ?)
+  `).run(
+    src.studyId, templateName, src.machineName, src.energyMv,
+    src.prescriptionDoseGy, src.numberOfFractions,
+    src.normalization, src.optimizationAlgorithm, src.doseAlgorithm,
+    src.gridSizeMm, src.heterogeneityCorrection,
+    src.isocenterX, src.isocenterY, src.isocenterZ,
+    src.referencePoints.length > 0 ? JSON.stringify(src.referencePoints) : null,
+    planId
+  );
+  const templateId = info.lastInsertRowid;
+
+  const insertBeam = db.prepare(`
+    INSERT INTO ebrt_beams (plan_id, beam_number, name, beam_type, energy_mv, gantry_angle,
+      gantry_angle_stop, collimator_angle, couch_angle, jaw_x1, jaw_x2, jaw_y1, jaw_y2, weight,
+      wedge_angle, bolus)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const copyBeams = db.transaction(() => {
+    for (const b of src.beams) {
+      insertBeam.run(
+        templateId, b.beamNumber, b.name, b.beamType, b.energyMv,
+        b.gantryAngle, b.gantryAngleStop, b.collimatorAngle, b.couchAngle,
+        b.jawX1, b.jawX2, b.jawY1, b.jawY2, b.weight, b.wedgeAngle, b.bolus
+      );
+    }
+  });
+  copyBeams();
+
+  auditLog(db, { reqId, userId, action: 'save_ebrt_plan_as_template', resourceType: 'ebrt_plan', resourceId: templateId, metadata: { sourcePlanId: planId, beamCount: src.beams.length } });
+  return getPlanWithBeams(db, templateId);
+}
+
+/** List all plan templates (study-independent). */
+export function listTemplates({ userId, reqId }) {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT id, study_id as studyId, name, machine_name as machineName, energy_mv as energyMv,
+           prescription_dose_gy as prescriptionDoseGy, number_of_fractions as numberOfFractions,
+           normalization, optimization_algorithm as optimizationAlgorithm, dose_algorithm as doseAlgorithm,
+           grid_size_mm as gridSizeMm, heterogeneity_correction as heterogeneityCorrection,
+           approval_status as approvalStatus, isocenter_x as isocenterX, isocenter_y as isocenterY, isocenter_z as isocenterZ,
+           is_template as isTemplate, source_plan_id as sourcePlanId,
+           created_at as createdAt,
+           (SELECT COUNT(*) FROM ebrt_beams b WHERE b.plan_id = ebrt_plans.id) as beamCount
+    FROM ebrt_plans WHERE is_template = 1 ORDER BY created_at DESC, id DESC
+  `).all();
+  auditLog(db, { reqId, userId, action: 'list_ebrt_templates', resourceType: 'ebrt_plan', metadata: { count: rows.length } });
+  return rows;
+}
+
+/**
+ * Instantiate a template into a study as a fresh editable plan
+ * (is_template=0, source_plan_id=templateId) with all beams copied.
+ */
+export function instantiateTemplate({ templateId, studyId, name, userId, reqId }) {
+  const db = getDb();
+  const src = getPlanWithBeams(db, templateId);
+  if (!src.isTemplate) {
+    throw Object.assign(new Error('Plan is not a template'), { status: 400 });
+  }
+  const planName = str(name) || `${src.name.replace(/ template$/, '')} copy`;
+
+  const info = db.prepare(`
+    INSERT INTO ebrt_plans (study_id, name, machine_name, energy_mv, prescription_dose_gy,
+      number_of_fractions, normalization, optimization_algorithm, dose_algorithm,
+      grid_size_mm, heterogeneity_correction, approval_status, isocenter_x, isocenter_y, isocenter_z,
+      reference_points, is_template, source_plan_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UNAPPROVED', ?, ?, ?, ?, 0, ?)
+  `).run(
+    studyId, planName, src.machineName, src.energyMv,
+    src.prescriptionDoseGy, src.numberOfFractions,
+    src.normalization, src.optimizationAlgorithm, src.doseAlgorithm,
+    src.gridSizeMm, src.heterogeneityCorrection,
+    src.isocenterX, src.isocenterY, src.isocenterZ,
+    src.referencePoints.length > 0 ? JSON.stringify(src.referencePoints) : null,
+    templateId
+  );
+  const planId = info.lastInsertRowid;
+
+  const insertBeam = db.prepare(`
+    INSERT INTO ebrt_beams (plan_id, beam_number, name, beam_type, energy_mv, gantry_angle,
+      gantry_angle_stop, collimator_angle, couch_angle, jaw_x1, jaw_x2, jaw_y1, jaw_y2, weight,
+      wedge_angle, bolus)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const copyBeams = db.transaction(() => {
+    for (const b of src.beams) {
+      insertBeam.run(
+        planId, b.beamNumber, b.name, b.beamType, b.energyMv,
+        b.gantryAngle, b.gantryAngleStop, b.collimatorAngle, b.couchAngle,
+        b.jawX1, b.jawX2, b.jawY1, b.jawY2, b.weight, b.wedgeAngle, b.bolus
+      );
+    }
+  });
+  copyBeams();
+
+  auditLog(db, { reqId, userId, action: 'instantiate_ebrt_template', resourceType: 'ebrt_plan', resourceId: planId, metadata: { templateId, studyId, beamCount: src.beams.length } });
+  return getPlanWithBeams(db, planId);
 }

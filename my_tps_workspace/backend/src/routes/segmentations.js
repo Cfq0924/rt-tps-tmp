@@ -57,14 +57,15 @@ router.get('/:id', authMiddleware, (req, res, next) => {
   }
 });
 
-// PATCH /api/segmentations/:id — rename / recolor
+// PATCH /api/segmentations/:id — rename / recolor / approve
 router.patch('/:id', authMiddleware, (req, res, next) => {
   try {
-    const { name, color } = req.body;
+    const { name, color, approved } = req.body;
     const row = updateSegmentationMeta({
       id: parseInt(req.params.id, 10),
       name,
       color,
+      approved,
       userId: req.user.userId,
       reqId: req.id,
     });

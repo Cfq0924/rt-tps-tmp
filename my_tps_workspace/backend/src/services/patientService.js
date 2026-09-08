@@ -1,3 +1,4 @@
+import { unlinkSync } from 'fs';
 import { getDb } from '../db/init.js';
 import { v4 as uuidv4 } from 'uuid';
 import { auditLog } from '../logging/index.js';
@@ -81,4 +82,62 @@ export function findOrCreatePatient({ externalId, name, userId, reqId }) {
   }
 
   return patient;
+}
+
+/**
+ * Delete a patient (studies, files, segmentations and plans cascade at the
+ * DB level) and unlink the physical DICOM files best-effort.
+ * @returns {{ok: true, deletedFiles: number}}
+ */
+export function deletePatient({ id, userId, reqId }) {
+  const db = getDb();
+  const patient = db.prepare('SELECT id FROM patients WHERE id = ?').get(id);
+  if (!patient) {
+    throw Object.assign(new Error('Patient not found'), { status: 404 });
+  }
+  const filePaths = db.prepare(`
+    SELECT df.file_path FROM dicom_files df
+    JOIN studies s ON s.id = df.study_id
+    WHERE s.patient_id = ?
+  `).all(id).map(r => r.file_path);
+
+  db.prepare('DELETE FROM patients WHERE id = ?').run(id);
+  const deletedFiles = removeFiles(filePaths);
+
+  auditLog(db, { reqId, userId, action: 'delete_patient', resourceType: 'patient', resourceId: id, metadata: { studiesRemoved: true, filesUnlinked: deletedFiles } });
+  return { ok: true, deletedFiles };
+}
+
+/**
+ * Delete a single study and its files (dicom_files cascade; physical files
+ * unlinked best-effort).
+ * @returns {{ok: true, deletedFiles: number}}
+ */
+export function deleteStudy({ id, userId, reqId }) {
+  const db = getDb();
+  const study = db.prepare('SELECT id FROM studies WHERE id = ?').get(id);
+  if (!study) {
+    throw Object.assign(new Error('Study not found'), { status: 404 });
+  }
+  const filePaths = db.prepare('SELECT file_path FROM dicom_files WHERE study_id = ?').all(id).map(r => r.file_path);
+
+  db.prepare('DELETE FROM studies WHERE id = ?').run(id);
+  const deletedFiles = removeFiles(filePaths);
+
+  auditLog(db, { reqId, userId, action: 'delete_study', resourceType: 'study', resourceId: id, metadata: { filesUnlinked: deletedFiles } });
+  return { ok: true, deletedFiles };
+}
+
+function removeFiles(paths) {
+  let removed = 0;
+  for (const p of paths) {
+    if (!p) continue;
+    try {
+      unlinkSync(p);
+      removed++;
+    } catch {
+      // file already gone or move failed — deletion of the record stands
+    }
+  }
+  return removed;
 }

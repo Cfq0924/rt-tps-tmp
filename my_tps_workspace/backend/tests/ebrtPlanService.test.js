@@ -21,16 +21,10 @@ const STUDY_ID = 1;
 async function setupSchema() {
   const { default: Database } = await import('better-sqlite3');
   const db = new Database(TEST_DB);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS patients (id INTEGER PRIMARY KEY AUTOINCREMENT, external_id TEXT UNIQUE NOT NULL, name TEXT NOT NULL, birth_date TEXT, gender TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE IF NOT EXISTS studies (id INTEGER PRIMARY KEY AUTOINCREMENT, patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE, study_instance_uid TEXT UNIQUE NOT NULL, study_date TEXT, description TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE IF NOT EXISTS dicom_files (id INTEGER PRIMARY KEY AUTOINCREMENT, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE, series_instance_uid TEXT NOT NULL, sop_instance_uid TEXT UNIQUE NOT NULL, modality TEXT, instance_number INTEGER, file_path TEXT NOT NULL, file_name TEXT, file_size INTEGER, image_position_x REAL, image_position_y REAL, image_position_z REAL, pixel_spacing_x REAL, pixel_spacing_y REAL, rows INTEGER, columns INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, req_id TEXT, user_id INTEGER, action TEXT NOT NULL, resource_type TEXT, resource_id INTEGER, metadata TEXT, ip_address TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE IF NOT EXISTS segmentations (id INTEGER PRIMARY KEY AUTOINCREMENT, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE, name TEXT NOT NULL, color TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE IF NOT EXISTS segmentation_slices (id INTEGER PRIMARY KEY AUTOINCREMENT, segmentation_id INTEGER NOT NULL REFERENCES segmentations(id) ON DELETE CASCADE, sop_instance_uid TEXT NOT NULL, instance_number INTEGER, points_json TEXT NOT NULL, UNIQUE(segmentation_id, sop_instance_uid));
-    CREATE TABLE IF NOT EXISTS ebrt_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE, name TEXT NOT NULL, machine_name TEXT, energy_mv REAL, prescription_dose_gy REAL, number_of_fractions INTEGER, normalization TEXT, optimization_algorithm TEXT, dose_algorithm TEXT, grid_size_mm REAL, heterogeneity_correction INTEGER DEFAULT 0, approval_status TEXT DEFAULT 'UNAPPROVED', isocenter_x REAL, isocenter_y REAL, isocenter_z REAL, source_rtplan_file_id INTEGER REFERENCES dicom_files(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE IF NOT EXISTS ebrt_beams (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL REFERENCES ebrt_plans(id) ON DELETE CASCADE, beam_number INTEGER NOT NULL, name TEXT, beam_type TEXT, energy_mv REAL, gantry_angle REAL, gantry_angle_stop REAL, collimator_angle REAL, couch_angle REAL, jaw_x1 REAL, jaw_x2 REAL, jaw_y1 REAL, jaw_y2 REAL, weight REAL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(plan_id, beam_number));
-  `);
+  const { readFileSync } = await import('fs');
+  const { dirname } = await import('path');
+  const schemaPath = join(dirname(fileURLToPath(import.meta.url)), '../src/db/schema.sql');
+  db.exec(readFileSync(schemaPath, 'utf-8'));
   const p = db.prepare("INSERT INTO patients (external_id, name) VALUES ('ebrt-test', 'EBRT Test')").run();
   db.prepare('INSERT INTO studies (patient_id, study_instance_uid) VALUES (?, ?)').run(p.lastInsertRowid, '1.2.840.ebrttest.1');
   db.close();
@@ -121,6 +115,126 @@ describe('ebrtPlanService', () => {
     const p = svc.updatePlan({ id: planId, payload: { approval_status: 'APPROVED' }, userId: 1, reqId: 't' });
     assert.strictEqual(p.approvalStatus, 'APPROVED');
     assert.throws(() => svc.updatePlan({ id: planId, payload: { approval_status: 'NOPE' }, userId: 1, reqId: 't' }), e => e.status === 400);
+  });
+
+  describe('reference points', () => {
+    let refPlanId;
+
+    it('creates a plan with reference points and returns them parsed', () => {
+      const p = svc.createPlan({
+        studyId: STUDY_ID,
+        payload: {
+          name: 'RefPt Plan', prescription_dose_gy: 60, number_of_fractions: 30,
+          reference_points: [
+            { name: 'cord', x: 1.5, y: -220, z: -880 },
+            { name: 'parotid L', x: 60, y: -210, z: -882 },
+          ],
+        },
+        userId: 1, reqId: 't',
+      });
+      assert.strictEqual(p.referencePoints.length, 2);
+      assert.strictEqual(p.referencePoints[0].name, 'cord');
+      assert.ok(Math.abs(p.referencePoints[0].x - 1.5) < 1e-9);
+      refPlanId = p.id;
+    });
+
+    it('rejects invalid reference points', () => {
+      assert.throws(() => svc.updatePlan({
+        id: refPlanId, payload: { reference_points: [{ x: 1, y: 2, z: 3 }] }, userId: 1, reqId: 't',
+      }), e => e.status === 400); // missing name
+      assert.throws(() => svc.updatePlan({
+        id: refPlanId, payload: { reference_points: [{ name: 'x', y: 2, z: 3 }] }, userId: 1, reqId: 't',
+      }), e => e.status === 400); // missing x
+      assert.throws(() => svc.updatePlan({
+        id: refPlanId, payload: { reference_points: 'nope' }, userId: 1, reqId: 't',
+      }), e => e.status === 400);
+    });
+
+    it('updates and clears reference points via PATCH', () => {
+      const p = svc.updatePlan({
+        id: refPlanId,
+        payload: { reference_points: [{ name: 'new pt', x: 0, y: 0, z: 0 }] },
+        userId: 1, reqId: 't',
+      });
+      assert.strictEqual(p.referencePoints.length, 1);
+      const cleared = svc.updatePlan({ id: refPlanId, payload: { reference_points: [] }, userId: 1, reqId: 't' });
+      assert.strictEqual(cleared.referencePoints.length, 0);
+    });
+  });
+
+  describe('wedge and bolus beam fields', () => {
+    let wedgePlanId;
+
+    it('stores wedge_angle and bolus on a beam', () => {
+      const created = svc.createPlan({
+        studyId: STUDY_ID,
+        payload: { name: 'Wedge Plan', prescription_dose_gy: 50, number_of_fractions: 25 },
+        userId: 1, reqId: 't',
+      });
+      wedgePlanId = created.id;
+      const p = svc.addBeam({
+        planId: wedgePlanId,
+        payload: { beam_type: 'STATIC', gantry_angle: 90, wedge_angle: 45, bolus: '5mm gel' },
+        userId: 1, reqId: 't',
+      });
+      const beam = p.beams.find(b => b.gantryAngle === 90);
+      assert.strictEqual(beam.wedgeAngle, 45);
+      assert.strictEqual(beam.bolus, '5mm gel');
+    });
+
+    it('rejects out-of-range wedge angles', () => {
+      assert.throws(() => svc.addBeam({
+        planId: wedgePlanId, payload: { beam_type: 'STATIC', wedge_angle: 400 }, userId: 1, reqId: 't',
+      }), e => e.status === 400);
+    });
+
+    it('updates wedge/bolus via beam PATCH', () => {
+      const plan = svc.getPlan({ id: wedgePlanId, userId: 1, reqId: 't' });
+      const beam = plan.beams[0];
+      const p = svc.updateBeam({ beamId: beam.id, payload: { wedge_angle: 30, bolus: null }, userId: 1, reqId: 't' });
+      const updated = p.beams.find(b => b.id === beam.id);
+      assert.strictEqual(updated.wedgeAngle, 30);
+      assert.strictEqual(updated.bolus, null);
+    });
+  });
+
+  describe('plan templates', () => {
+    let template;
+
+    it('saves a plan as a template with beams, then instantiates it into a study', () => {
+      const created = svc.createPlan({
+        studyId: STUDY_ID,
+        payload: { name: 'Template source', prescription_dose_gy: 70, number_of_fractions: 35 },
+        userId: 1, reqId: 't',
+      });
+      svc.addBeam({ planId: created.id, payload: { beam_type: 'STATIC', gantry_angle: 0 }, userId: 1, reqId: 't' });
+      svc.addBeam({ planId: created.id, payload: { beam_type: 'STATIC', gantry_angle: 180 }, userId: 1, reqId: 't' });
+
+      template = svc.savePlanAsTemplate({ planId: created.id, name: 'Head & Neck basic', userId: 1, reqId: 't' });
+      assert.strictEqual(template.isTemplate, 1);
+      assert.strictEqual(template.name, 'Head & Neck basic');
+      assert.strictEqual(template.approvalStatus, 'UNAPPROVED');
+      assert.strictEqual(template.beams.length, 2);
+
+      const templates = svc.listTemplates({ userId: 1, reqId: 't' });
+      assert.ok(templates.some(t => t.id === template.id));
+
+      const plan = svc.instantiateTemplate({ templateId: template.id, studyId: STUDY_ID, userId: 1, reqId: 't' });
+      assert.strictEqual(plan.isTemplate, 0);
+      assert.strictEqual(plan.name, 'Head & Neck basic copy');
+      assert.strictEqual(plan.sourcePlanId, template.id);
+      assert.strictEqual(plan.beams.length, 2);
+      assert.deepStrictEqual(plan.beams.map(b => b.beamNumber), [1, 2]);
+    });
+
+    it('rejects instantiation from a non-template plan', () => {
+      assert.throws(() => svc.instantiateTemplate({ templateId: planId, studyId: STUDY_ID, userId: 1, reqId: 't' }), e => e.status === 400);
+    });
+
+    it('hides templates from the study plan list', () => {
+      const plans = svc.listPlans({ studyId: STUDY_ID, userId: 1, reqId: 't' });
+      assert.ok(plans.every(p => !p.isTemplate));
+    });
   });
 
   it('deletes a beam and a plan', () => {

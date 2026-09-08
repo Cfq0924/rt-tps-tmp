@@ -10,6 +10,9 @@ import {
   updateBeam,
   deleteBeam,
   createPlanFromRTPlan,
+  savePlanAsTemplate,
+  listTemplates,
+  instantiateTemplate,
 } from '../services/ebrtPlanService.js';
 
 const router = Router();
@@ -140,6 +143,47 @@ router.delete('/beams/:beamId', authMiddleware, (req, res, next) => {
       reqId: req.id,
     });
     res.json({ plan });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/ebrt/templates — list reusable plan templates
+router.get('/templates', authMiddleware, (req, res, next) => {
+  try {
+    const rows = listTemplates({ userId: req.user.userId, reqId: req.id });
+    res.json({ templates: rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/ebrt/plans/:id/save-as-template — copy plan+beams into a template
+router.post('/plans/:id/save-as-template', authMiddleware, (req, res, next) => {
+  try {
+    const template = savePlanAsTemplate({
+      planId: parseInt(req.params.id, 10),
+      name: req.body?.name,
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.status(201).json({ template });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/ebrt/templates/:id/instantiate — create an editable plan from a template
+router.post('/templates/:id/instantiate', authMiddleware, (req, res, next) => {
+  try {
+    const plan = instantiateTemplate({
+      templateId: parseInt(req.params.id, 10),
+      studyId: parseInt(req.body?.studyId, 10),
+      name: req.body?.name,
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.status(201).json({ plan });
   } catch (err) {
     next(err);
   }

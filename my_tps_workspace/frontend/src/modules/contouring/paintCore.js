@@ -310,3 +310,174 @@ export function redo(history, currentGetter) {
   history.past.push({ sliceIdx: snap.sliceIdx, data: currentGetter(snap.sliceIdx).slice() });
   return snap;
 }
+
+/**
+ * Flood fill a connected region of similar intensity (HU) starting from a
+ * seed point, writing `value` into the mask. Tolerance is absolute HU.
+ * Uses a stack-based flood fill over 4-connected neighbors.
+ *
+ * @param {Int16Array} ctPixels - CT voxel values (HU), row-major
+ * @param {Uint8Array} mask - target mask (mutated)
+ * @param {number} cols
+ * @param {number} rows
+ * @param {number} si - seed column
+ * @param {number} sj - seed row
+ * @param {number} huTolerance - absolute HU tolerance around the seed value
+ * @param {number} value - mask value to write
+ * @returns {number} number of voxels written
+ */
+export function floodFillHU(ctPixels, mask, cols, rows, si, sj, huTolerance, value) {
+  if (si < 0 || sj < 0 || si >= cols || sj >= rows) return 0;
+  const seedHU = ctPixels[sj * cols + si];
+  const lo = seedHU - huTolerance;
+  const hi = seedHU + huTolerance;
+  const visited = new Uint8Array(cols * rows);
+  const stack = [[si, sj]];
+  let count = 0;
+  while (stack.length) {
+    const [i, j] = stack.pop();
+    if (i < 0 || j < 0 || i >= cols || j >= rows) continue;
+    const idx = j * cols + i;
+    if (visited[idx]) continue;
+    visited[idx] = 1;
+    const hu = ctPixels[idx];
+    if (hu < lo || hu > hi) continue;
+    mask[idx] = value;
+    count++;
+    stack.push([i + 1, j], [i - 1, j], [i, j + 1], [i, j - 1]);
+  }
+  return count;
+}
+
+/**
+ * Binary mask operation between two same-size masks, writing into maskA.
+ * @param {'union'|'subtract'|'intersect'} op
+ */
+export function booleanOp(maskA, maskB, op) {
+  for (let i = 0; i < maskA.length; i++) {
+    const a = maskA[i], b = maskB[i];
+    if (op === 'union') maskA[i] = a || b ? 1 : 0;
+    else if (op === 'subtract') maskA[i] = a && !b ? 1 : 0;
+    else if (op === 'intersect') maskA[i] = a && b ? 1 : 0;
+  }
+}
+
+/**
+ * Expand (dilate) a mask by a circular structuring element in-plane, and
+ * copy/dilate across ±zLayers neighboring slices. Used for CTV→PTV margin
+ * growth. Works in image pixel space; marginPx derived from mm by caller.
+ *
+ * @param {Uint8Array} mask - mutated in place
+ * @param {number} cols
+ * @param {number} rows
+ * @param {number} marginPx - dilation radius in pixels
+ * @param {number} zLayers - number of slices to extend above/below (0 = in-plane only)
+ * @param {Function} getSlice - (sliceOffset) => Uint8Array mask of the neighbor slice
+ * @param {Function} setSlice - (sliceOffset, mask) => void
+ */
+export function expandMask3D(mask, cols, rows, marginPx, zLayers, getSlice, setSlice) {
+  // in-plane dilation: any voxel within marginPx of a set voxel becomes set
+  const dilated = new Uint8Array(mask.length);
+  const r2 = marginPx * marginPx;
+  const offsets = [];
+  for (let dj = -Math.ceil(marginPx); dj <= Math.ceil(marginPx); dj++) {
+    for (let di = -Math.ceil(marginPx); di <= Math.ceil(marginPx); di++) {
+      if (di * di + dj * dj <= r2) offsets.push([di, dj]);
+    }
+  }
+  for (let idx = 0; idx < mask.length; idx++) {
+    if (!mask[idx]) continue;
+    const j = Math.floor(idx / cols), i = idx % cols;
+    for (const [di, dj] of offsets) {
+      const ni = i + di, nj = j + dj;
+      if (ni >= 0 && ni < cols && nj >= 0 && nj < rows) dilated[nj * cols + ni] = 1;
+    }
+  }
+  mask.set(dilated);
+
+  // z propagation: dilate the in-plane result onto neighbor slices
+  for (let dz = 1; dz <= zLayers; dz++) {
+    for (const dir of [-1, 1]) {
+      const neighbor = getSlice(dir * dz);
+      if (!neighbor) continue;
+      for (let idx = 0; idx < mask.length; idx++) {
+        if (mask[idx]) neighbor[idx] = 1;
+      }
+      setSlice(dir * dz, neighbor);
+    }
+  }
+}
+
+/**
+ * Convert a cornerstone image's raw pixel data to HU by applying
+ * rescale slope/intercept. getPixelData() returns *stored* values — for CT
+ * these are shifted (typically intercept −1024), so absolute-HU operations
+ * (flood fill tolerance, body threshold −300) must go through this.
+ * @param {Object} image - cornerstone image (cache.getImage result)
+ * @returns {Float32Array} HU values
+ */
+export function imageToHU(image) {
+  const px = image.getPixelData();
+  const slope = image.slope ?? 1;
+  const intercept = image.intercept ?? 0;
+  return Float32Array.from(px, v => v * slope + intercept);
+}
+
+/**
+ * Keep only the largest 4-connected component of a mask (in place).
+ * @returns {number} size of the kept component
+ */
+export function keepLargestComponent(mask, cols, rows) {
+  const visited = new Uint8Array(mask.length);
+  const labels = new Int32Array(mask.length).fill(-1);
+  const sizes = [];
+  let labelCount = 0;
+  const stack = [];
+  // label all 4-connected components
+  for (let start = 0; start < mask.length; start++) {
+    if (!mask[start] || visited[start]) continue;
+    const myLabel = labelCount++;
+    let size = 0;
+    stack.push(start);
+    visited[start] = 1;
+    while (stack.length) {
+      const idx = stack.pop();
+      labels[idx] = myLabel;
+      size++;
+      const j = Math.floor(idx / cols), i = idx % cols;
+      for (const [ni, nj] of [[i+1,j],[i-1,j],[i,j+1],[i,j-1]]) {
+        if (ni < 0 || nj < 0 || ni >= cols || nj >= rows) continue;
+        const nIdx = nj * cols + ni;
+        if (mask[nIdx] && !visited[nIdx]) { visited[nIdx] = 1; stack.push(nIdx); }
+      }
+    }
+    sizes.push(size);
+  }
+  if (labelCount <= 1) return sizes[0] ?? 0;
+  // keep only the largest component
+  const keepLabel = sizes.indexOf(Math.max(...sizes));
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i] && labels[i] !== keepLabel) mask[i] = 0;
+  }
+  return sizes[keepLabel];
+}
+
+/**
+ * Auto body contour: threshold CT HU, keep the largest connected component,
+ * and (optionally) close the table area — v1 keeps only the patient body
+ * (largest component above threshold). Returns the body mask as a new array.
+ *
+ * @param {Int16Array} ctPixels - HU values
+ * @param {number} cols
+ * @param {number} rows
+ * @param {number} huThreshold - HU threshold separating body from air (default -300)
+ * @returns {Uint8Array} binary body mask
+ */
+export function autoBodyMask(ctPixels, cols, rows, huThreshold = -300) {
+  const mask = new Uint8Array(cols * rows);
+  for (let i = 0; i < mask.length; i++) {
+    if (ctPixels[i] > huThreshold) mask[i] = 1;
+  }
+  keepLargestComponent(mask, cols, rows);
+  return mask;
+}

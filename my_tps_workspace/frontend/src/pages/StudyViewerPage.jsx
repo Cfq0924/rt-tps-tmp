@@ -16,12 +16,15 @@ import { DEFAULT_ISODOSE_LEVELS } from '../lib/doseTransform.js';
 import PaintLayer from '../modules/contouring/PaintLayer.jsx';
 import ContouringPanel from '../modules/contouring/ContouringPanel.jsx';
 import { useContouring } from '../modules/contouring/useContouring.js';
-import { RegistrationModule, EvaluationModule } from '../modules/placeholders.jsx';
+import { imageToHU } from '../modules/contouring/paintCore.js';
+import { RegistrationModule } from '../modules/placeholders.jsx';
+import EvaluationPanel from '../modules/evaluation/EvaluationPanel.jsx';
 import EbrtWorkspace from '../modules/ebrt/EbrtWorkspace.jsx';
 import { useEbrtPlans } from '../modules/ebrt/useEbrtPlans.js';
 import { registerCTPlaneMetadataProvider } from '../lib/ctMetadataProvider.js';
 import EBRTBeamsOverlay from '../modules/ebrt/EBRTBeamsOverlay.jsx';
 import { useRTPlan } from '../hooks/useRTPlan.js';
+import * as cornerstone from '@cornerstonejs/core';
 import { initCornerstone } from '../initCornerstone.js';
 
 export default function StudyViewerPage() {
@@ -447,7 +450,22 @@ export default function StudyViewerPage() {
       setEbrtEnabled(true);
       handleGoToIsocenter();
     }
+    if (mod === 'evaluation') {
+      // DVH needs the dose grid — load it regardless of heatmap display
+      loadGrid();
+    }
   }
+
+  // CT HU pixels of the displayed slice (for flood fill / auto body)
+  const getCtPixels = useCallback(() => {
+    try {
+      const vp = viewportInstance;
+      if (!vp) return null;
+      return imageToHU(cornerstone.cache.getImage(vp.getCurrentImageId()));
+    } catch (err) {
+      return null;
+    }
+  }, [viewportInstance]);
 
   function handleDoseVisibleChange(nextVisible) {
     setDoseVisible(nextVisible);
@@ -701,11 +719,13 @@ export default function StudyViewerPage() {
               masks={contouring.masks}
               segments={contouring.segments}
               activeSegmentId={contouring.activeSegmentId}
+              activeSegmentApproved={contouring.activeSegmentApproved}
               tool={contouring.tool}
               brushSizeMm={contouring.brushSizeMm}
               paintVersion={contouring.paintVersion}
               onStrokeStart={contouring.strokeStart}
               onStrokeEnd={contouring.strokeEnd}
+              onFloodFill={(sliceIdx, si, sj, ctPixels) => contouring.floodFillAt(sliceIdx, { i: si, j: sj }, 50, ctPixels)}
             />
           )}
         </Box>
@@ -765,7 +785,13 @@ export default function StudyViewerPage() {
             </>
           )}
 
-          {activeModule === 'contouring' && <ContouringPanel contouring={contouring} />}
+          {activeModule === 'contouring' && (
+            <ContouringPanel
+              contouring={contouring}
+              sliceIdx={currentImageIndex}
+              getCtPixels={getCtPixels}
+            />
+          )}
           {activeModule === 'ebrt' && (
             <EbrtWorkspace
               studyId={Number(studyId)}
@@ -774,7 +800,17 @@ export default function StudyViewerPage() {
             />
           )}
           {activeModule === 'registration' && <RegistrationModule />}
-          {activeModule === 'evaluation' && <EvaluationModule />}
+          {activeModule === 'evaluation' && (
+            <EvaluationPanel
+              plan={rtPlan}
+              roiSequence={structures}
+              contourSequence={contours}
+              paintedSegments={contouring.segments.map(s => ({ ...s, slices: contouring.serializeSegment(s.id) }))}
+              doseGrid={doseGrid}
+              doseMeta={doseData}
+              ctFiles={filesForModality}
+            />
+          )}
         </Box>
       </Box>
     </Box>

@@ -9,6 +9,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
  */
 export function useEbrtPlans({ studyId, enabled }) {
   const [plans, setPlans] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -146,11 +147,53 @@ export function useEbrtPlans({ studyId, enabled }) {
     setPlans(prev => prev.map(p => (p.id === plan.id ? plan : p)));
   }, []);
 
+  const refreshTemplates = useCallback(async () => {
+    const res = await fetch('/api/ebrt/templates', { credentials: 'include' });
+    if (!res.ok) throw new Error('Failed to list templates');
+    const { templates: rows } = await res.json();
+    setTemplates(rows);
+    return rows;
+  }, []);
+
+  const saveAsTemplate = useCallback(async (planId, name) => {
+    const res = await fetch(`/api/ebrt/plans/${planId}/save-as-template`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(name ? { name } : {}),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Failed to save template');
+    }
+    const { template } = await res.json();
+    await refreshTemplates();
+    return template;
+  }, [refreshTemplates]);
+
+  const instantiateTemplate = useCallback(async (templateId, name) => {
+    const res = await fetch(`/api/ebrt/templates/${templateId}/instantiate`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studyId, name }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Failed to create plan from template');
+    }
+    const { plan } = await res.json();
+    await refreshList();
+    setSelectedPlanId(plan.id);
+    return plan;
+  }, [studyId, refreshList]);
+
   return {
-    plans, selectedPlan, selectedPlanId, setSelectedPlanId,
+    plans, templates, selectedPlan, selectedPlanId, setSelectedPlanId,
     loading, error,
     createPlan, importFromRTPlan, updatePlan, deletePlan,
     addBeam, updateBeam, deleteBeam,
+    refreshTemplates, saveAsTemplate, instantiateTemplate,
   };
 }
 

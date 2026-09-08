@@ -1,8 +1,13 @@
 import { Router } from 'express';
 import { register, login } from '../services/authService.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, AUTH_DISABLED } from '../middleware/auth.js';
 
 const router = Router();
+
+// Whether the backend enforces authentication (AUTH_DISABLED env switch).
+router.get('/mode', (req, res) => {
+  res.json({ authDisabled: AUTH_DISABLED });
+});
 
 router.post('/register', async (req, res, next) => {
   try {

@@ -58,7 +58,7 @@ export function validateSlicesPayload(slices) {
 export function listSegmentations({ studyId, userId, reqId }) {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT id, study_id as studyId, name, color, created_at as createdAt,
+    SELECT id, study_id as studyId, name, color, approved, created_at as createdAt,
            (SELECT COUNT(*) FROM segmentation_slices s WHERE s.segmentation_id = segmentations.id) as sliceCount
     FROM segmentations
     WHERE study_id = ?
@@ -81,7 +81,7 @@ export function createSegmentation({ studyId, name, color, userId, reqId }) {
   auditLog(db, { reqId, userId, action: 'create_segmentation', resourceType: 'segmentation', resourceId: result.lastInsertRowid, metadata: { studyId, name } });
 
   const row = db.prepare(`
-    SELECT id, study_id as studyId, name, color, created_at as createdAt, 0 as sliceCount
+    SELECT id, study_id as studyId, name, color, approved, created_at as createdAt, 0 as sliceCount
     FROM segmentations WHERE id = ?
   `).get(result.lastInsertRowid);
   return row;
@@ -90,7 +90,7 @@ export function createSegmentation({ studyId, name, color, userId, reqId }) {
 export function getSegmentationMeta({ id, userId, reqId }) {
   const db = getDb();
   const row = db.prepare(`
-    SELECT id, study_id as studyId, name, color, created_at as createdAt,
+    SELECT id, study_id as studyId, name, color, approved, created_at as createdAt,
            (SELECT COUNT(*) FROM segmentation_slices s WHERE s.segmentation_id = segmentations.id) as sliceCount
     FROM segmentations WHERE id = ?
   `).get(id);
@@ -101,7 +101,7 @@ export function getSegmentationMeta({ id, userId, reqId }) {
   return row;
 }
 
-export function updateSegmentationMeta({ id, name, color, userId, reqId }) {
+export function updateSegmentationMeta({ id, name, color, approved, userId, reqId }) {
   const db = getDb();
   const existing = db.prepare('SELECT id FROM segmentations WHERE id = ?').get(id);
   if (!existing) {
@@ -116,7 +116,10 @@ export function updateSegmentationMeta({ id, name, color, userId, reqId }) {
   if (color !== undefined) {
     db.prepare('UPDATE segmentations SET color = ? WHERE id = ?').run(color, id);
   }
-  auditLog(db, { reqId, userId, action: 'update_segmentation', resourceType: 'segmentation', resourceId: id, metadata: { name, color } });
+  if (approved !== undefined) {
+    db.prepare('UPDATE segmentations SET approved = ? WHERE id = ?').run(approved ? 1 : 0, id);
+  }
+  auditLog(db, { reqId, userId, action: 'update_segmentation', resourceType: 'segmentation', resourceId: id, metadata: { name, color, approved } });
   return getSegmentationMeta({ id, userId, reqId });
 }
 

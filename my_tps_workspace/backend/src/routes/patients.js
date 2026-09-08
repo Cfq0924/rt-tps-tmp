@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
-import { listPatients, getPatient, createPatient } from '../services/patientService.js';
+import { listPatients, getPatient, createPatient, deletePatient } from '../services/patientService.js';
 
 const router = Router();
 
@@ -44,6 +44,20 @@ router.post('/', authMiddleware, (req, res, next) => {
       reqId: req.id,
     });
     res.status(201).json({ patient });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/patients/:id — delete patient with all studies/files (cascade)
+router.delete('/:id', authMiddleware, (req, res, next) => {
+  try {
+    const result = deletePatient({
+      id: parseInt(req.params.id, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json(result);
   } catch (err) {
     next(err);
   }

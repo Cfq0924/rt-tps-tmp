@@ -28,6 +28,21 @@ function initializeSchema(db) {
   const schemaPath = join(__dirname, 'schema.sql');
   const schema = readFileSync(schemaPath, 'utf-8');
   db.exec(schema);
+  // CREATE TABLE IF NOT EXISTS won't touch pre-existing tables — add columns
+  // introduced after initial release to older databases.
+  addColumnIfMissing(db, 'segmentations', 'approved', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'ebrt_plans', 'reference_points', 'TEXT');
+  addColumnIfMissing(db, 'ebrt_plans', 'is_template', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'ebrt_plans', 'source_plan_id', 'INTEGER REFERENCES ebrt_plans(id)');
+  addColumnIfMissing(db, 'ebrt_beams', 'wedge_angle', 'REAL');
+  addColumnIfMissing(db, 'ebrt_beams', 'bolus', 'TEXT');
+}
+
+function addColumnIfMissing(db, table, column, definition) {
+  const cols = db.pragma(`table_info(${table})`);
+  if (!cols.some(c => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
 
 export function closeDb() {

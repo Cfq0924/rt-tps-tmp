@@ -8,9 +8,10 @@ import {
   fillEllipse,
   maskToPolygons,
   patientToImagePixel,
+  imageToHU,
 } from './paintCore.js';
 
-const TOOLS = { BRUSH: 'brush', ERASER: 'eraser', RECT: 'rect', CIRCLE: 'circle' };
+const TOOLS = { BRUSH: 'brush', ERASER: 'eraser', RECT: 'rect', CIRCLE: 'circle', FLOOD: 'floodfill' };
 
 /**
  * PaintLayer - interactive canvas for the contouring module.
@@ -34,6 +35,8 @@ const TOOLS = { BRUSH: 'brush', ERASER: 'eraser', RECT: 'rect', CIRCLE: 'circle'
  * @param {number} props.paintVersion - bump to force a redraw after external mask changes
  * @param {Function} props.onStrokeStart - (sliceIdx) => void (snapshot for undo)
  * @param {Function} props.onStrokeEnd - () => void (bump version)
+ * @param {boolean} props.activeSegmentApproved - when true, painting is blocked
+ * @param {Function} props.onFloodFill - (imageIJ, event) => void for the flood-fill tool
  */
 export default function PaintLayer({
   enabled,
@@ -49,6 +52,8 @@ export default function PaintLayer({
   paintVersion,
   onStrokeStart,
   onStrokeEnd,
+  activeSegmentApproved = false,
+  onFloodFill,
 }) {
   const canvasRef = useRef(null);
   const drawingRef = useRef(null); // { lastImg: {i,j}, startImg: {i,j} }
@@ -112,6 +117,7 @@ export default function PaintLayer({
 
     const onPointerDown = (e) => {
       if (!enabled || activeSegmentId == null || !ctGeom) return;
+      if (activeSegmentApproved) return; // approved segments are read-only
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
       const img = canvasToImage(e.clientX, e.clientY);
@@ -119,12 +125,20 @@ export default function PaintLayer({
       drawingRef.current = {
         lastImg: img,
         startImg: { ...img },
-        // shape tools preview from a snapshot so dragging in/out works
         preStroke: (tool === TOOLS.RECT || tool === TOOLS.CIRCLE) && mask ? mask.slice() : null,
       };
       onStrokeStart?.(sliceIdx);
       if (tool === TOOLS.BRUSH || tool === TOOLS.ERASER) {
         applyAt(img);
+      } else if (tool === TOOLS.FLOOD) {
+        // flood fill needs CT HU values — resolved by the owner callback
+        let ctPixels = null;
+        try {
+          ctPixels = imageToHU(window.cornerstone.cache.getImage(viewport.getCurrentImageId()));
+        } catch { /* pixels unavailable (e.g. image not cached yet) */ }
+        if (ctPixels) {
+          onFloodFill?.(sliceIdx, Math.floor(img.i), Math.floor(img.j), ctPixels);
+        }
       }
     };
 
