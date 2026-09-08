@@ -93,6 +93,7 @@ export default function StudyViewerPage() {
   const [doseOpacity, setDoseOpacity] = useState(0.5);
   const [doseThreshold, setDoseThreshold] = useState(20);
   const [isodoseLevels, setIsodoseLevels] = useState(DEFAULT_ISODOSE_LEVELS);
+  const [exportMenuAnchor, setExportMenuAnchor] = useState(null);
   // M5 point dose probe (evaluation module)
   const [doseProbeEnabled, setDoseProbeEnabled] = useState(false);
   const [doseProbe, setDoseProbe] = useState(null); // { point, doseCgy, pctRx }
@@ -580,6 +581,34 @@ export default function StudyViewerPage() {
           ))}
 
           <Box sx={{ flex: 1 }} />
+
+          {/* M1 DICOM RT export */}
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<Download />}
+            onClick={(e) => setExportMenuAnchor(e.currentTarget)}
+            sx={{ fontSize: '0.75rem', py: 0.5, mr: 1 }}
+          >
+            Export
+          </Button>
+          <Menu
+            anchorEl={exportMenuAnchor}
+            open={!!exportMenuAnchor}
+            onClose={() => setExportMenuAnchor(null)}
+          >
+            <MenuItem
+              onClick={() => { setExportMenuAnchor(null); window.location.href = `/api/export/study/${studyId}/rtstruct`; }}
+            >
+              RTSTRUCT — painted segments
+            </MenuItem>
+            <MenuItem
+              disabled={!ebrt.selectedPlan}
+              onClick={() => { setExportMenuAnchor(null); window.location.href = `/api/export/ebrt/plan/${ebrt.selectedPlan.id}/rtplan`; }}
+            >
+              RTPLAN — {ebrt.selectedPlan?.name ?? 'no plan selected'}
+            </MenuItem>
+          </Menu>
 
           <Button
             size="small"

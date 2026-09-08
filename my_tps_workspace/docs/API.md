@@ -502,6 +502,27 @@ Notes:
 
 ---
 
+## Export
+
+DICOM RT export (M1). All endpoints return `application/dicom` attachment
+downloads and write an audit log entry.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/export/study/:studyId/rtstruct` | Painted segmentations → RTSTRUCT (`?segmentationIds=1,2` optional filter) |
+| `GET` | `/export/ebrt/plan/:planId/rtplan` | Workspace EBRT plan → minimal RTPLAN |
+| `GET` | `/export/file/:fileId` | Byte-level passthrough of an imported file |
+
+Notes:
+- RTSTRUCT: one ROI per segmentation, InterpretedType inferred from naming
+  (PTV/GTV/CTV prefix, BOLUS → EXTERNAL, else ORGAN); frame of reference and
+  ContourImage references come from the study's CT series.
+- RTPLAN minimal: geometry only (gantry/collimator/couch/jaws/wedge/bolus) —
+  no MLC leaf positions or meterset exist in the workspace model; VMAT arcs
+  exported as DYNAMIC beams with start/stop control points.
+
+---
+
 ## Error Responses
 
 All errors follow this format:
