@@ -468,6 +468,12 @@ export default function StudyViewerPage() {
     setDoseProbe(sampleDoseAt(point));
   }, [sampleDoseAt]);
 
+  const handleJumpToSlice = useCallback((idx) => {
+    if (idx == null || !Number.isInteger(idx)) return;
+    if (activeModality !== 'CT') setActiveModality('CT');
+    setCurrentImageIndex(idx);
+  }, [activeModality]);
+
   const handleJumpToGlobalMax = useCallback(() => {
     if (!doseGrid || !doseSamplingGeom || !filesForModality.length) return;
     const { flatIndex } = findGlobalMax(doseGrid);
@@ -884,6 +890,8 @@ export default function StudyViewerPage() {
               studyId={Number(studyId)}
               ebrt={ebrt}
               rtPlanFileId={rtPlanFileId}
+              currentSliceIdx={currentImageIndex}
+              onJumpToSlice={handleJumpToSlice}
             />
           )}
           {activeModule === 'registration' && <RegistrationModule />}

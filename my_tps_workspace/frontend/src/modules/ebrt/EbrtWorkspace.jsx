@@ -1,8 +1,9 @@
 import { Box, Typography, TextField, MenuItem, Button, Table, TableBody, TableCell,
   TableHead, TableRow, IconButton, Switch, Chip, Divider, Tooltip } from '@mui/material';
-import { Add, Delete, CloudDownload, Settings, BookmarkAdded, Bookmark, GppGood } from '@mui/icons-material';
+import { Add, Delete, CloudDownload, Settings, BookmarkAdded, Bookmark, GppGood, RateReview } from '@mui/icons-material';
 import { useState } from 'react';
 import { MACHINES, DOSE_ALGORITHMS, OPTIMIZATION_ALGORITHMS, NORMALIZATIONS, getMachine } from '../../lib/machines.js';
+import PeerReviewPanel from './PeerReviewPanel.jsx';
 
 const numOrNull = (v) => {
   const n = Number(v);
@@ -22,10 +23,11 @@ const NEXT_APPROVAL = { UNAPPROVED: 'REVIEWED', REVIEWED: 'APPROVED' };
  * @param {Object} props.ebrt - useEbrtPlans() hook result
  * @param {number|null} props.rtPlanFileId - imported RTPLAN file id (for import)
  */
-export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId }) {
+export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSliceIdx, onJumpToSlice }) {
   const { plans, selectedPlan, selectedPlanId, setSelectedPlanId, selectPlan } = ebrt;
   const [showNewPlan, setShowNewPlan] = useState(plans.length === 0);
   const [formError, setFormError] = useState('');
+  const [showReview, setShowReview] = useState(false);
 
   // new-plan form state
   const [name, setName] = useState('');
@@ -396,6 +398,13 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId }) {
                 Reset
               </Button>
             )}
+            <Tooltip title="Peer review this plan (comments + approve/reject)">
+              <Button size="small" variant={showReview ? 'contained' : 'outlined'} startIcon={<RateReview />}
+                      onClick={() => setShowReview(v => !v)}
+                      sx={{ fontSize: '0.55rem', py: 0.1, color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                Review
+              </Button>
+            </Tooltip>
             <Box sx={{ flex: 1 }} />
             <Tooltip title="Save this plan as a reusable template">
               <IconButton size="small" sx={{ p: 0.25 }} aria-label="plan-save-as-template"
@@ -404,6 +413,16 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId }) {
               </IconButton>
             </Tooltip>
           </Box>
+
+          {/* peer review session panel (Ch5) */}
+          {showReview && (
+            <PeerReviewPanel
+              plan={selectedPlan}
+              currentSliceIdx={currentSliceIdx}
+              onJumpToSlice={onJumpToSlice}
+              onPlanUpdated={() => ebrt.refreshList?.()}
+            />
+          )}
 
           <Typography
             variant="caption"

@@ -142,6 +142,34 @@ CREATE TABLE IF NOT EXISTS ebrt_beams (
 CREATE INDEX IF NOT EXISTS idx_ebrt_plans_study ON ebrt_plans(study_id);
 CREATE INDEX IF NOT EXISTS idx_ebrt_beams_plan ON ebrt_beams(plan_id);
 
+-- RT Peer Review (Eclipse Ch5): a review session collects reviewer comments
+-- on a workspace plan; closing it records the decision (which also updates
+-- the plan's approval status). One OPEN session per plan, enforced in service.
+CREATE TABLE IF NOT EXISTS peer_review_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id INTEGER NOT NULL REFERENCES ebrt_plans(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  decision TEXT,
+  opened_by INTEGER,
+  opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  closed_by INTEGER,
+  closed_at TEXT
+);
+
+-- Reviewer comments with an optional location pin (slice / structure / beam).
+CREATE TABLE IF NOT EXISTS review_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES peer_review_sessions(id) ON DELETE CASCADE,
+  author_user_id INTEGER,
+  author_name TEXT,
+  comment_text TEXT NOT NULL,
+  location_json TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_sessions_plan ON peer_review_sessions(plan_id);
+CREATE INDEX IF NOT EXISTS idx_review_comments_session ON review_comments(session_id);
+
 CREATE INDEX IF NOT EXISTS idx_dicom_files_study ON dicom_files(study_id);
 CREATE INDEX IF NOT EXISTS idx_dicom_files_series ON dicom_files(series_instance_uid);
 CREATE INDEX IF NOT EXISTS idx_dicom_files_sop ON dicom_files(sop_instance_uid);

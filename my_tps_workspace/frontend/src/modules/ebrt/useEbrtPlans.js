@@ -189,11 +189,12 @@ export function useEbrtPlans({ studyId, enabled }) {
   }, [studyId, refreshList]);
 
   return {
-    plans, templates, selectedPlan, selectedPlanId, setSelectedPlanId,
+    plans, templates, selectedPlan, selectedPlanId, setSelectedPlanId, selectPlan,
     loading, error,
     createPlan, importFromRTPlan, updatePlan, deletePlan,
     addBeam, updateBeam, deleteBeam,
     refreshTemplates, saveAsTemplate, instantiateTemplate,
+    refreshList,
   };
 }
 

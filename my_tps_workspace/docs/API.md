@@ -523,6 +523,25 @@ Notes:
 
 ---
 
+## Peer Review
+
+RT peer review sessions on workspace plans (Eclipse Ch5). A session can be
+opened on a REVIEWED plan; closing it with a decision updates the plan's
+approval status. One OPEN session per plan; all actions are audited.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/peer-review/plans/:planId/sessions` | Open a review session (plan must be REVIEWED) |
+| `GET` | `/peer-review/sessions?planId=&status=` | List sessions (with comment counts) |
+| `GET` | `/peer-review/sessions/:id` | Session with comments |
+| `POST` | `/peer-review/sessions/:id/comments` | Add comment (`{text, location?}`) |
+| `POST` | `/peer-review/sessions/:id/close` | Close with `{decision: APPROVED\|UNAPPROVED}` |
+
+`location` optionally pins a comment to `{sliceIdx, structureId, beamNumber}`
+(integers, unknown keys rejected). Closed sessions are read-only.
+
+---
+
 ## Error Responses
 
 All errors follow this format:
