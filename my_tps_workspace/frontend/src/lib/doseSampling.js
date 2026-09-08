@@ -31,6 +31,18 @@ export function patientToVoxel(p, geom) {
 }
 
 /**
+ * Grid dimensions under any of the naming conventions in this codebase:
+ * doseMeta uses columns/rows, RTDoseOverlay-built geoms use _cols/_rows,
+ * dvh.js reads them tolerantly — sampling does the same.
+ */
+function gridDims(geom) {
+  return {
+    cols: geom.cols ?? geom.columns ?? geom._cols,
+    rows: geom.rows ?? geom._rows,
+  };
+}
+
+/**
  * Trilinear dose sample at a patient point. For the k axis the grid frames
  * are treated as point samples on the GFOV planes: the two neighbouring
  * frames are linearly interpolated when the point lies between them,
@@ -42,7 +54,7 @@ export function patientToVoxel(p, geom) {
  * @returns {number|null} dose in cGy, or null when the point is outside the grid
  */
 export function trilinearSample(grid, geom, p) {
-  const { cols, rows } = geom;
+  const { cols, rows } = gridDims(geom);
   const gfov = geom.gridFrameOffsetVector;
   const { i, j, k } = patientToVoxel(p, geom);
   if (i < -1 || j < -1 || i > cols || j > rows) return null;
@@ -94,7 +106,7 @@ export function findGlobalMax(grid) {
  * Flat voxel index → patient coordinates.
  */
 export function voxelToPatient(flatIndex, geom) {
-  const { cols, rows } = geom;
+  const { cols, rows } = gridDims(geom);
   const k = Math.floor(flatIndex / (cols * rows));
   const rem = flatIndex % (cols * rows);
   const j = Math.floor(rem / cols);

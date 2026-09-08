@@ -83,8 +83,16 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     const snap = h.past.pop();
     if (!snap || !ctGeom) return;
     const sliceMap = masksRef.current.get(snap.segId);
-    h.future.push({ segId: snap.segId, sliceIdx: snap.sliceIdx, data: (sliceMap?.get(snap.sliceIdx) ?? new Uint8Array(ctGeom.cols * ctGeom.rows)).slice() });
-    sliceMap.set(snap.sliceIdx, snap.data);
+    const readCurrent = (sliceIdx) =>
+      (sliceMap?.get(sliceIdx) ?? new Uint8Array(ctGeom.cols * ctGeom.rows)).slice();
+    if (snap.group) {
+      // composite entry (multi-slice op): current state of every slice goes to redo
+      h.future.push({ segId: snap.segId, group: snap.group.map(g => ({ sliceIdx: g.sliceIdx, data: readCurrent(g.sliceIdx) })) });
+      for (const g of snap.group) sliceMap.set(g.sliceIdx, g.data);
+    } else {
+      h.future.push({ segId: snap.segId, sliceIdx: snap.sliceIdx, data: readCurrent(snap.sliceIdx) });
+      sliceMap.set(snap.sliceIdx, snap.data);
+    }
     bump();
     refreshHistoryInfo();
   }, [bump, ctGeom, refreshHistoryInfo]);
@@ -94,8 +102,15 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     const snap = h.future.pop();
     if (!snap || !ctGeom) return;
     const sliceMap = masksRef.current.get(snap.segId);
-    h.past.push({ segId: snap.segId, sliceIdx: snap.sliceIdx, data: (sliceMap?.get(snap.sliceIdx) ?? new Uint8Array(ctGeom.cols * ctGeom.rows)).slice() });
-    sliceMap.set(snap.sliceIdx, snap.data);
+    const readCurrent = (sliceIdx) =>
+      (sliceMap?.get(sliceIdx) ?? new Uint8Array(ctGeom.cols * ctGeom.rows)).slice();
+    if (snap.group) {
+      h.past.push({ segId: snap.segId, group: snap.group.map(g => ({ sliceIdx: g.sliceIdx, data: readCurrent(g.sliceIdx) })) });
+      for (const g of snap.group) sliceMap.set(g.sliceIdx, g.data);
+    } else {
+      h.past.push({ segId: snap.segId, sliceIdx: snap.sliceIdx, data: readCurrent(snap.sliceIdx) });
+      sliceMap.set(snap.sliceIdx, snap.data);
+    }
     bump();
     refreshHistoryInfo();
   }, [bump, ctGeom, refreshHistoryInfo]);
@@ -251,18 +266,33 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
   /** Boolean op of a source segment's mask INTO the active segment (all shared slices). */
   const applyBoolean = useCallback((sourceSegId, op) => {
     const seg = activeSegment();
-    if (!seg || seg.approved || sourceSegId === activeSegmentId) return;
-    strokeStart(0);
+    if (!seg || seg.approved || !ctGeom) return;
+    if (sourceSegId === activeSegmentId || sourceSegId == null) return;
     const srcMap = masksRef.current.get(sourceSegId);
     const dstMap = masksRef.current.get(activeSegmentId);
-    if (srcMap && dstMap) {
-      for (const [sliceIdx, dst] of dstMap) {
-        const src = srcMap.get(sliceIdx);
-        if (src) booleanOp(dst, src, op);
-      }
+    if (!srcMap || !dstMap) return;
+
+    // one composite undo entry covering every slice this op touches —
+    // a single-slice snapshot would make multi-slice booleans only partially
+    // restorable
+    const group = [];
+    for (const [sliceIdx, dst] of dstMap) {
+      if (srcMap.has(sliceIdx)) group.push({ sliceIdx, data: dst.slice() });
     }
-    strokeEnd();
-  }, [activeSegmentId, strokeStart, strokeEnd]);
+    if (group.length === 0) return;
+    const h = historyRef.current;
+    h.past.push({ segId: activeSegmentId, group });
+    if (h.past.length > 20) h.past.shift();
+    h.future.length = 0;
+
+    for (const [sliceIdx, dst] of dstMap) {
+      const src = srcMap.get(sliceIdx);
+      if (src) booleanOp(dst, src, op);
+    }
+    setDirty(true);
+    bump();
+    refreshHistoryInfo();
+  }, [activeSegmentId, ctGeom, refreshHistoryInfo]);
 
   /** Expand the active segment by marginMm in-plane and zLayers slices. */
   const expandActive = useCallback((marginMm, zLayers) => {

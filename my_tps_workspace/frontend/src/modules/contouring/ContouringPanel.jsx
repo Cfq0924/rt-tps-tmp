@@ -1,5 +1,6 @@
-import { Box, Typography, ButtonGroup, Button, Tooltip, Slider, TextField, Divider } from '@mui/material';
-import { Brush, Clear, CropSquare, Circle, Undo, Redo, Save, FormatColorFill, AutoFixHigh, OpenInFull } from '@mui/icons-material';
+import { useState } from 'react';
+import { Box, Typography, ButtonGroup, Button, Tooltip, Slider, TextField, Divider, MenuItem } from '@mui/material';
+import { Brush, Clear, CropSquare, Circle, Undo, Redo, Save, FormatColorFill, AutoFixHigh, OpenInFull, Merge } from '@mui/icons-material';
 import SegmentPanel from './SegmentPanel.jsx';
 
 const TOOLS = [
@@ -19,6 +20,8 @@ const TOOLS = [
  */
 export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
   const c = contouring;
+  const [boolSource, setBoolSource] = useState('');
+  const [boolOp, setBoolOp] = useState('subtract');
 
   const toolButton = (t) => (
     <Tooltip key={t.id} title={t.label}>
@@ -97,6 +100,43 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
                       sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
                 Body
               </Button>
+            </Tooltip>
+          </Box>
+
+          {/* boolean ops: source segment INTO the active segment */}
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <TextField
+              size="small" select label="Source" value={boolSource}
+              onChange={e => setBoolSource(e.target.value)}
+              sx={{ flex: 1.2 }}
+              inputProps={{ style: { fontSize: '0.65rem' } }}
+            >
+              {c.segments.filter(s => s.id !== c.activeSegmentId && !s.approved).map(s => (
+                <MenuItem key={s.id} value={s.id} sx={{ fontSize: '0.7rem' }}>{s.name}</MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              size="small" select label="Op" value={boolOp}
+              onChange={e => setBoolOp(e.target.value)}
+              sx={{ flex: 1 }}
+              inputProps={{ style: { fontSize: '0.65rem' } }}
+            >
+              <MenuItem value="union" sx={{ fontSize: '0.7rem' }}>Union</MenuItem>
+              <MenuItem value="subtract" sx={{ fontSize: '0.7rem' }}>Subtract</MenuItem>
+              <MenuItem value="intersect" sx={{ fontSize: '0.7rem' }}>Intersect</MenuItem>
+            </TextField>
+            <Tooltip title="Apply the boolean op to the active segment (undoable in one step)">
+              <span>
+                <Button
+                  size="small" variant="outlined" aria-label="boolean-apply"
+                  startIcon={<Merge fontSize="small" />}
+                  disabled={boolSource === ''}
+                  onClick={() => { c.applyBoolean(Number(boolSource), boolOp); setBoolSource(''); }}
+                  sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}
+                >
+                  Apply
+                </Button>
+              </span>
             </Tooltip>
           </Box>
         </Box>

@@ -19,6 +19,8 @@ import { useContouring } from '../modules/contouring/useContouring.js';
 import { imageToHU } from '../modules/contouring/paintCore.js';
 import { RegistrationModule } from '../modules/placeholders.jsx';
 import EvaluationPanel from '../modules/evaluation/EvaluationPanel.jsx';
+import DoseProbeOverlay from '../modules/evaluation/DoseProbeOverlay.jsx';
+import { trilinearSample, findGlobalMax, voxelToPatient } from '../lib/doseSampling.js';
 import EbrtWorkspace from '../modules/ebrt/EbrtWorkspace.jsx';
 import { useEbrtPlans } from '../modules/ebrt/useEbrtPlans.js';
 import { registerCTPlaneMetadataProvider } from '../lib/ctMetadataProvider.js';
@@ -91,6 +93,9 @@ export default function StudyViewerPage() {
   const [doseOpacity, setDoseOpacity] = useState(0.5);
   const [doseThreshold, setDoseThreshold] = useState(20);
   const [isodoseLevels, setIsodoseLevels] = useState(DEFAULT_ISODOSE_LEVELS);
+  // M5 point dose probe (evaluation module)
+  const [doseProbeEnabled, setDoseProbeEnabled] = useState(false);
+  const [doseProbe, setDoseProbe] = useState(null); // { point, doseCgy, pctRx }
   const [rtPlanFileId, setRtPlanFileId] = useState(null);
   const [selectedBeamNumber, setSelectedBeamNumber] = useState(null);
   const [ebrtEnabled, setEbrtEnabled] = useState(false);
@@ -435,6 +440,48 @@ export default function StudyViewerPage() {
     setCurrentImageIndex(isocenterSliceIdx);
   }
 
+  // --- M5 point dose / global max (evaluation module) ---
+  // Sampling geometry built from doseMeta with the field names doseSampling expects.
+  const doseSamplingGeom = useMemo(() => {
+    if (!doseData) return null;
+    return {
+      imagePosition: doseData.imagePosition,
+      imageOrientation: doseData.imageOrientation,
+      pixelSpacing: doseData.pixelSpacing,
+      gridFrameOffsetVector: doseData.gridFrameOffsetVector,
+      cols: doseData.columns,
+      rows: doseData.rows,
+    };
+  }, [doseData]);
+
+  const sampleDoseAt = useCallback((point) => {
+    if (!doseGrid || !doseSamplingGeom) return { point, doseCgy: null, pctRx: null };
+    const doseCgy = trilinearSample(doseGrid, doseSamplingGeom, point);
+    const pctRx = doseCgy != null && prescriptionCgy
+      ? (doseCgy / prescriptionCgy) * 100
+      : null;
+    return { point, doseCgy, pctRx };
+  }, [doseGrid, doseSamplingGeom, prescriptionCgy]);
+
+  const handlePointPick = useCallback((point) => {
+    setDoseProbe(sampleDoseAt(point));
+  }, [sampleDoseAt]);
+
+  const handleJumpToGlobalMax = useCallback(() => {
+    if (!doseGrid || !doseSamplingGeom || !filesForModality.length) return;
+    const { flatIndex } = findGlobalMax(doseGrid);
+    const point = voxelToPatient(flatIndex, doseSamplingGeom);
+    setDoseProbe(sampleDoseAt(point));
+    // jump to the CT slice containing the max point (isocenter-jump pattern)
+    let best = 0, bestDist = Infinity;
+    filesForModality.forEach((f, i) => {
+      const d = Math.abs((f.image_position_z ?? 0) - point[2]);
+      if (d < bestDist) { bestDist = d; best = i; }
+    });
+    if (activeModality !== 'CT') setActiveModality('CT');
+    setCurrentImageIndex(best);
+  }, [doseGrid, doseSamplingGeom, filesForModality, sampleDoseAt, activeModality]);
+
   function switchModule(mod) {
     setActiveModule(mod);
     if (mod === 'contouring') {
@@ -728,6 +775,17 @@ export default function StudyViewerPage() {
               onFloodFill={(sliceIdx, si, sj, ctPixels) => contouring.floodFillAt(sliceIdx, { i: si, j: sj }, 50, ctPixels)}
             />
           )}
+
+          {/* M5 point dose probe (evaluation module, toggled from the panel) */}
+          {activeModule === 'evaluation' && (
+            <DoseProbeOverlay
+              enabled={doseProbeEnabled}
+              viewport={viewportInstance}
+              ctZ={currentCTZ}
+              doseProbe={doseProbe}
+              onPointPick={handlePointPick}
+            />
+          )}
         </Box>
 
         {/* Right sidebar - per-module panels */}
@@ -809,6 +867,10 @@ export default function StudyViewerPage() {
               doseGrid={doseGrid}
               doseMeta={doseData}
               ctFiles={filesForModality}
+              doseProbe={doseProbe}
+              probeEnabled={doseProbeEnabled}
+              onToggleProbe={() => setDoseProbeEnabled(v => !v)}
+              onJumpToGlobalMax={handleJumpToGlobalMax}
             />
           )}
         </Box>

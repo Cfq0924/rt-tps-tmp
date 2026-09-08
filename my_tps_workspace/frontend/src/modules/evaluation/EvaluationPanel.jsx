@@ -29,6 +29,10 @@ const DVH_BIN_WIDTH = 20; // cGy per bin
  * @param {Float32Array|null} props.doseGrid
  * @param {Object|null} props.doseMeta
  * @param {Array} props.ctFiles - CT files slice-ordered
+ * @param {Object|null} props.doseProbe - { point, doseCgy, pctRx } last sampled point
+ * @param {boolean} props.probeEnabled - point dose click-capture active
+ * @param {Function} props.onToggleProbe - toggle point dose click capture
+ * @param {Function} props.onJumpToGlobalMax - jump to the global max dose point
  */
 export default function EvaluationPanel({
   plan,
@@ -38,6 +42,10 @@ export default function EvaluationPanel({
   doseGrid,
   doseMeta,
   ctFiles,
+  doseProbe = null,
+  probeEnabled = false,
+  onToggleProbe,
+  onJumpToGlobalMax,
 }) {
   const [selected, setSelected] = useState([]); // [{key, name, color, slices}]
   const [results, setResults] = useState([]); // [{key, name, color, stats, dvh}]
@@ -216,6 +224,44 @@ export default function EvaluationPanel({
           <canvas ref={canvasRef} style={{ width: '100%', height: 180, display: 'block' }} />
           <Typography variant="caption" sx={{ display: 'block', fontSize: '0.58rem', color: 'text.disabled', mt: 0.5 }}>
             Cumulative DVH — one curve per selected structure
+          </Typography>
+
+          <Divider sx={{ my: 1 }} />
+
+          {/* point dose probe (Eclipse Ch6.7) + global max jump (Ch6.6) */}
+          <Box sx={{ display: 'flex', gap: 0.5, mb: 0.5 }}>
+            <Tooltip title="Toggle point dose: click the CT to sample dose at a point">
+              <Button
+                size="small"
+                variant={probeEnabled ? 'contained' : 'outlined'}
+                startIcon={<Colorize />}
+                onClick={onToggleProbe}
+                sx={{ fontSize: '0.6rem', flex: 1 }}
+              >
+                Point Dose
+              </Button>
+            </Tooltip>
+            <Tooltip title="Jump to the slice with the global maximum dose">
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<TrendingUp />}
+                onClick={onJumpToGlobalMax}
+                sx={{ fontSize: '0.6rem', flex: 1, color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}
+              >
+                Global Max
+              </Button>
+            </Tooltip>
+          </Box>
+          <Typography variant="caption" sx={{ display: 'block', fontSize: '0.58rem', color: 'text.secondary', mb: 0.5, fontFamily: 'mono' }}>
+            {doseProbe == null && 'Point dose off — enable and click the CT to sample.'}
+            {doseProbe != null && doseProbe.doseCgy == null && 'Picked point is outside the dose grid.'}
+            {doseProbe != null && doseProbe.doseCgy != null && (
+              <>
+                {doseProbe.doseCgy.toFixed(1)} cGy
+                {doseProbe.pctRx != null ? ` · ${doseProbe.pctRx.toFixed(1)}% Rx` : ''}
+              </>
+            )}
           </Typography>
 
           <Divider sx={{ my: 1 }} />
