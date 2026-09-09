@@ -121,3 +121,12 @@ Halcyon 工作流、PACS Query/Retrieve SCP（服务端）、电子束计划
 - **dcmjs-dimse 成熟度**：先 1-2 天 spike 验证 C-STORE 可用性再排 UI
 - **重采样质量**：三线性在骨/气界面会平滑——记录为已知限制，
   窗口/层面采样证据截图留档
+
+---
+
+## 补充计划（2026-09）
+
+外照射计划后端专项补全计划见 **PLAN-EBRT-BACKEND.md**（Course/处方 DPV 模型、
+MLC 控制点、归一化服务、计算模型、Couch 结构、审批校验/Revisions）。
+与本文衔接：B2 供给 M2 引擎 v2 的 MLC 通量；B4 供 M2 参数；B6 供给 Peer Review
+增强。建议 B1→B2 先行，再进入 M2。
