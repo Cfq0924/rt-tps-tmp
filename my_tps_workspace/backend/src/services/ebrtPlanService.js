@@ -71,11 +71,34 @@ export function validateReferencePoints(points) {
   const normalized = [];
   for (const pt of points) {
     if (!pt || !str(pt.name)) return { error: 'each reference point needs a name', value: null };
-    const coords = [pt.x, pt.y, pt.z].map(v => num(v));
-    if (coords.some(c => c === null)) {
+    const isDpv = !!pt.isDpv;
+    // DPVs (dose prescription volumes) may omit the location; located points
+    // must carry numeric coordinates
+    const rawCoords = [pt.x, pt.y, pt.z];
+    if (!isDpv && rawCoords.some(v => v === undefined || v === null || v === '')) {
+      return { error: 'located reference point needs x/y/z', value: null };
+    }
+    if (rawCoords.some(v => v !== undefined && v !== null && v !== '' && !Number.isFinite(Number(v)))) {
       return { error: 'reference point x/y/z must be numeric', value: null };
     }
-    normalized.push({ name: str(pt.name), x: coords[0], y: coords[1], z: coords[2] });
+    const coords = rawCoords.map(v => (v === undefined || v === null || v === '' ? null : Number(v)));
+    const type = str(pt.type, isDpv ? 'TARGET' : 'POINT').toUpperCase();
+    if (!['POINT', 'TARGET'].includes(type)) {
+      return { error: 'reference point type must be POINT or TARGET', value: null };
+    }
+    const entry = {
+      name: str(pt.name),
+      type,
+      x: isDpv ? null : coords[0],
+      y: isDpv ? null : coords[1],
+      z: isDpv ? null : coords[2],
+      isDpv,
+    };
+    const limit = num(pt.totalDoseLimitGy);
+    if (limit !== null) entry.totalDoseLimitGy = limit;
+    const daily = num(pt.dailyDoseGy);
+    if (daily !== null) entry.dailyDoseGy = daily;
+    normalized.push(entry);
   }
   return { error: null, value: JSON.stringify(normalized) };
 }
@@ -87,8 +110,16 @@ const PLAN_SELECT = `
          grid_size_mm as gridSizeMm, heterogeneity_correction as heterogeneityCorrection,
          approval_status as approvalStatus, isocenter_x as isocenterX, isocenter_y as isocenterY, isocenter_z as isocenterZ,
          reference_points as referencePointsJson, is_template as isTemplate, source_plan_id as sourcePlanId,
+         course_id as courseId, target_structure_name as targetStructureName,
+         dose_per_fraction_gy as dosePerFractionGy, primary_point_name as primaryPointName,
+         calc_models_json as calcModelsJson, delta_couch_json as deltaCouchJson,
          source_rtplan_file_id as sourceRtplanFileId, created_at as createdAt
   FROM ebrt_plans`;
+
+function parseJsonField(v, fallback = null) {
+  if (v == null) return fallback;
+  try { return JSON.parse(v); } catch { return fallback; }
+}
 
 function getPlanWithBeams(db, id) {
   const plan = db.prepare(`${PLAN_SELECT} WHERE id = ?`).get(id);
@@ -96,6 +127,10 @@ function getPlanWithBeams(db, id) {
     throw Object.assign(new Error('EBRT plan not found'), { status: 404 });
   }
   plan.referencePoints = parseReferencePoints(plan.referencePointsJson);
+  plan.calcModels = parseJsonField(plan.calcModelsJson);
+  plan.deltaCouch = parseJsonField(plan.deltaCouchJson);
+  plan.calcModelsJson = undefined;
+  plan.deltaCouchJson = undefined;
   delete plan.referencePointsJson;
   plan.beams = db.prepare(`
     SELECT id, plan_id as planId, beam_number as beamNumber, name, beam_type as beamType,
@@ -126,7 +161,8 @@ export function listPlans({ studyId, userId, reqId }) {
            normalization, optimization_algorithm as optimizationAlgorithm, dose_algorithm as doseAlgorithm,
            grid_size_mm as gridSizeMm, heterogeneity_correction as heterogeneityCorrection,
            approval_status as approvalStatus, isocenter_x as isocenterX, isocenter_y as isocenterY, isocenter_z as isocenterZ,
-           is_template as isTemplate, source_plan_id as sourcePlanId,
+           is_template as isTemplate, source_plan_id as sourcePlanId, course_id as courseId,
+           target_structure_name as targetStructureName, dose_per_fraction_gy as dosePerFractionGy,
            source_rtplan_file_id as sourceRtplanFileId, created_at as createdAt,
            (SELECT COUNT(*) FROM ebrt_beams b WHERE b.plan_id = ebrt_plans.id) as beamCount
     FROM ebrt_plans WHERE study_id = ? AND is_template = 0 ORDER BY created_at DESC, id DESC
@@ -154,8 +190,9 @@ export function createPlan({ studyId, payload = {}, userId, reqId }) {
   const info = db.prepare(`
     INSERT INTO ebrt_plans (study_id, name, machine_name, energy_mv, prescription_dose_gy,
       number_of_fractions, normalization, optimization_algorithm, dose_algorithm,
-      grid_size_mm, heterogeneity_correction, isocenter_x, isocenter_y, isocenter_z, reference_points)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      grid_size_mm, heterogeneity_correction, isocenter_x, isocenter_y, isocenter_z, reference_points,
+      course_id, target_structure_name, dose_per_fraction_gy, primary_point_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     studyId,
     str(payload.name),
@@ -171,7 +208,11 @@ export function createPlan({ studyId, payload = {}, userId, reqId }) {
     num(payload.isocenter_x, 0),
     num(payload.isocenter_y, 0),
     num(payload.isocenter_z, 0),
-    refPts.value
+    refPts.value,
+    payload.course_id != null ? num(payload.course_id) : null,
+    str(payload.target_structure_name),
+    num(payload.dose_per_fraction_gy),
+    str(payload.primary_point_name)
   );
 
   auditLog(db, { reqId, userId, action: 'create_ebrt_plan', resourceType: 'ebrt_plan', resourceId: info.lastInsertRowid, metadata: { studyId, name: payload.name } });
@@ -184,7 +225,8 @@ const UPDATABLE_PLAN_FIELDS = new Set([
   'name', 'machine_name', 'energy_mv', 'prescription_dose_gy', 'number_of_fractions',
   'normalization', 'optimization_algorithm', 'dose_algorithm', 'grid_size_mm',
   'heterogeneity_correction', 'approval_status', 'isocenter_x', 'isocenter_y', 'isocenter_z',
-  'reference_points',
+  'reference_points', 'course_id', 'target_structure_name', 'dose_per_fraction_gy',
+  'primary_point_name', 'calc_models_json', 'delta_couch_json',
 ]);
 
 export function updatePlan({ id, payload = {}, userId, reqId }) {
@@ -202,6 +244,21 @@ export function updatePlan({ id, payload = {}, userId, reqId }) {
       if (refPts.error) throw Object.assign(new Error(refPts.error), { status: 400 });
       updates.push(`${k} = ?`);
       values.push(refPts.value);
+      continue;
+    }
+    if (k === 'calc_models_json' || k === 'delta_couch_json') {
+      // structured JSON fields: validate shapes, store the canonical form
+      const parsed = parseJsonField(typeof v === 'string' ? v : JSON.stringify(v));
+      if (parsed == null && v != null) throw Object.assign(new Error(`${k} must be valid JSON`), { status: 400 });
+      updates.push(`${k} = ?`);
+      values.push(v == null ? null : JSON.stringify(parsed));
+      continue;
+    }
+    if (k === 'dose_per_fraction_gy') {
+      const d = num(v);
+      if (d !== null && d <= 0) throw Object.assign(new Error('dose_per_fraction_gy must be > 0'), { status: 400 });
+      updates.push(`${k} = ?`);
+      values.push(d);
       continue;
     }
     updates.push(`${k} = ?`);

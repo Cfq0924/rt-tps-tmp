@@ -86,6 +86,17 @@ CREATE TABLE IF NOT EXISTS segmentation_slices (
 CREATE INDEX IF NOT EXISTS idx_segmentations_study ON segmentations(study_id);
 CREATE INDEX IF NOT EXISTS idx_segmentation_slices_seg ON segmentation_slices(segmentation_id);
 
+-- Treatment courses (Eclipse): a course groups one or more plans.
+CREATE TABLE IF NOT EXISTS courses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  intent TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_courses_study ON courses(study_id);
+
 -- External-beam planning: user-created plans (or editable copies imported
 -- from an RTPLAN file). One row = one plan with a single isocenter.
 CREATE TABLE IF NOT EXISTS ebrt_plans (
@@ -111,6 +122,12 @@ CREATE TABLE IF NOT EXISTS ebrt_plans (
   -- instantiated from one records its origin in source_plan_id.
   is_template INTEGER NOT NULL DEFAULT 0,
   source_plan_id INTEGER REFERENCES ebrt_plans(id),
+  course_id INTEGER REFERENCES courses(id),
+  target_structure_name TEXT,
+  dose_per_fraction_gy REAL,
+  primary_point_name TEXT,
+  calc_models_json TEXT,
+  delta_couch_json TEXT,
   source_rtplan_file_id INTEGER REFERENCES dicom_files(id),
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -141,6 +158,30 @@ CREATE TABLE IF NOT EXISTS ebrt_beams (
 
 CREATE INDEX IF NOT EXISTS idx_ebrt_plans_study ON ebrt_plans(study_id);
 CREATE INDEX IF NOT EXISTS idx_ebrt_beams_plan ON ebrt_beams(plan_id);
+
+-- Beam control points (Eclipse: per-CP gantry/collimator/couch/meterset and
+-- MLC leaf positions). MLC json: [{leafPair, x1, x2}] per leaf pair.
+CREATE TABLE IF NOT EXISTS beam_control_points (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  beam_id INTEGER NOT NULL REFERENCES ebrt_beams(id) ON DELETE CASCADE,
+  cp_index INTEGER NOT NULL,
+  gantry_angle REAL,
+  collimator_angle REAL,
+  couch_angle REAL,
+  cumulative_meterset_weight REAL,
+  mlc_json TEXT,
+  UNIQUE(beam_id, cp_index)
+);
+
+-- Field-in-Field subfields: shaped segments of a parent beam.
+CREATE TABLE IF NOT EXISTS beam_subfields (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  beam_id INTEGER NOT NULL REFERENCES ebrt_beams(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  weight REAL DEFAULT 1,
+  mlc_json TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 
 -- RT Peer Review (Eclipse Ch5): a review session collects reviewer comments
 -- on a workspace plan; closing it records the decision (which also updates

@@ -36,6 +36,14 @@ function initializeSchema(db) {
   addColumnIfMissing(db, 'ebrt_plans', 'source_plan_id', 'INTEGER REFERENCES ebrt_plans(id)');
   addColumnIfMissing(db, 'ebrt_beams', 'wedge_angle', 'REAL');
   addColumnIfMissing(db, 'ebrt_beams', 'bolus', 'TEXT');
+  addColumnIfMissing(db, 'ebrt_beams', 'meterset', 'REAL');
+  addColumnIfMissing(db, 'ebrt_beams', 'leaf_pair_count', 'INTEGER');
+  addColumnIfMissing(db, 'ebrt_plans', 'course_id', 'INTEGER REFERENCES courses(id)');
+  addColumnIfMissing(db, 'ebrt_plans', 'target_structure_name', 'TEXT');
+  addColumnIfMissing(db, 'ebrt_plans', 'dose_per_fraction_gy', 'REAL');
+  addColumnIfMissing(db, 'ebrt_plans', 'primary_point_name', 'TEXT');
+  addColumnIfMissing(db, 'ebrt_plans', 'calc_models_json', 'TEXT');
+  addColumnIfMissing(db, 'ebrt_plans', 'delta_couch_json', 'TEXT');
 }
 
 function addColumnIfMissing(db, table, column, definition) {
