@@ -23,6 +23,8 @@ import { trilinearSample, findGlobalMax, voxelToPatient } from '../lib/doseSampl
 import RegistrationOverlay from '../modules/registration/RegistrationOverlay.jsx';
 import RegistrationPanel from '../modules/registration/RegistrationPanel.jsx';
 import PlanSums from '../modules/doseSum/PlanSums.jsx';
+import MPRView from '../modules/mpr/MPRView.jsx';
+import { loadVolume } from '../lib/mprVolume.js';
 import EbrtWorkspace from '../modules/ebrt/EbrtWorkspace.jsx';
 import { useEbrtPlans } from '../modules/ebrt/useEbrtPlans.js';
 import { registerCTPlaneMetadataProvider } from '../lib/ctMetadataProvider.js';
@@ -98,6 +100,10 @@ export default function StudyViewerPage() {
   const [exportMenuAnchor, setExportMenuAnchor] = useState(null);
   // P3-M2 registration: moving series + current transform (overlay)
   const [movingState, setMovingState] = useState({ movingUid: '', files: null, movingIndex: 0, matrix: null });
+  // MPR three-plane viewer
+  const [mprEnabled, setMprEnabled] = useState(false);
+  const [mprState, setMprState] = useState({ volume: null, geom: null, progress: null, error: '' });
+  const [crosshair, setCrosshair] = useState({ xIdx: 256, yIdx: 256 });
   // M5 point dose probe (evaluation module)
   const [doseProbeEnabled, setDoseProbeEnabled] = useState(false);
   const [doseProbe, setDoseProbe] = useState(null); // { point, doseCgy, pctRx }
@@ -405,6 +411,9 @@ export default function StudyViewerPage() {
     };
   }, [filesForModality, currentImageIndex]);
 
+  // MPR column active: enabled + CT + images module (v1 scope)
+  const mprActive = mprEnabled && activeModality === 'CT' && activeModule === 'images';
+
   const prescriptionCgy = (() => {
     if (ebrt.selectedPlan?.prescriptionDoseGy != null) {
       return Math.round(ebrt.selectedPlan.prescriptionDoseGy * 100);
@@ -477,6 +486,54 @@ export default function StudyViewerPage() {
     if (activeModality !== 'CT') setActiveModality('CT');
     setCurrentImageIndex(idx);
   }, [activeModality]);
+
+  // --- MPR three-plane viewer (IMAGES module, CT only) ---
+  const ctFilesSorted = useMemo(
+    () => files.filter(f => f.modality === 'CT')
+      .sort((a, b) => (a.instance_number ?? 0) - (b.instance_number ?? 0)),
+    [files],
+  );
+
+  useEffect(() => {
+    if (!mprEnabled || mprState.volume || imageIds.length === 0) return;
+    let alive = true;
+    setMprState({ volume: null, geom: null, progress: { loaded: 0, total: imageIds.length }, error: '' });
+    loadVolume({
+      imageIds,
+      files: ctFilesSorted,
+      getSignedUrl,
+      onProgress: (loaded, total) => {
+        if (alive) setMprState(s => ({ ...s, progress: { loaded, total } }));
+      },
+    })
+      .then(({ volume, geom }) => {
+        if (alive) setMprState(s => ({ ...s, volume, geom, progress: null }));
+      })
+      .catch(err => {
+        if (alive) setMprState(s => ({ ...s, error: err.message, progress: null }));
+      });
+    return () => { alive = false; };
+  }, [mprEnabled, imageIds, ctFilesSorted, mprState.volume]);
+
+  // keep the default crosshair centred once the geometry is known
+  useEffect(() => {
+    if (mprState.geom) {
+      setCrosshair({
+        xIdx: Math.floor(mprState.geom.cols / 2),
+        yIdx: Math.floor(mprState.geom.rows / 2),
+      });
+    }
+  }, [mprState.geom]);
+
+  const handleMprCrosshair = useCallback((patch) => {
+    if (patch.sliceIdx != null && patch.sliceIdx !== currentImageIndex) {
+      setCurrentImageIndex(patch.sliceIdx);
+    }
+    setCrosshair(prev => ({
+      xIdx: patch.xIdx ?? prev.xIdx,
+      yIdx: patch.yIdx ?? prev.yIdx,
+    }));
+  }, [currentImageIndex]);
 
   const handleJumpToGlobalMax = useCallback(() => {
     if (!doseGrid || !doseSamplingGeom || !filesForModality.length) return;
@@ -578,6 +635,18 @@ export default function StudyViewerPage() {
           <Divider orientation="vertical" flexItem />
 
           {/* Modality tabs (imaging module only) */}
+          {activeModule === 'images' && activeModality === 'CT' && imageIds.length > 0 && (
+            <Tooltip title="Three-plane viewer (axial + coronal + sagittal)">
+              <Chip
+                label="MPR"
+                size="small"
+                variant={mprEnabled ? 'filled' : 'outlined'}
+                color={mprEnabled ? 'primary' : 'default'}
+                onClick={() => setMprEnabled(v => !v)}
+                sx={{ fontFamily: 'mono', fontSize: '0.7rem', height: 22, cursor: 'pointer' }}
+              />
+            </Tooltip>
+          )}
           {activeModule === 'images' && modalities.map(mod => (
             <Chip
               key={mod}
@@ -684,8 +753,9 @@ export default function StudyViewerPage() {
           </Box>
         )}
 
-        {/* Main viewer */}
-        <Box sx={{ flex: 1, position: 'relative', background: '#07111f' }}>
+        {/* Main viewer (+ MPR column when enabled) */}
+        <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative', background: '#07111f' }}>
+        <Box sx={{ flex: mprActive ? 2 : 1, position: 'relative' }}>
           {error && (
             <Alert
               severity="error"
@@ -838,6 +908,55 @@ export default function StudyViewerPage() {
               onPointPick={handlePointPick}
             />
           )}
+        </Box>
+
+        {mprActive && (
+          <Box sx={{ width: '30%', minWidth: 260, display: 'flex', flexDirection: 'column',
+                     borderLeft: '1px solid rgba(88,196,220,0.12)' }}>
+            <Box sx={{ flex: 1, position: 'relative', borderBottom: '1px solid rgba(88,196,220,0.12)' }}>
+              <MPRView
+                orientation="coronal"
+                volumeState={mprState}
+                crosshair={crosshair}
+                sliceIdx={currentImageIndex}
+                onCrosshairChange={handleMprCrosshair}
+                dose={doseVisible && doseGrid && doseData ? {
+                  grid: doseGrid,
+                  geom: {
+                    imagePosition: doseData.imagePosition,
+                    imageOrientation: doseData.imageOrientation,
+                    pixelSpacing: doseData.pixelSpacing,
+                    gridFrameOffsetVector: doseData.gridFrameOffsetVector,
+                    columns: doseData.columns, rows: doseData.rows,
+                  },
+                  doseAtFull: (doseData.maxDose ?? 100) * (doseThreshold / 100),
+                  opacity: doseOpacity,
+                } : null}
+              />
+            </Box>
+            <Box sx={{ flex: 1, position: 'relative' }}>
+              <MPRView
+                orientation="sagittal"
+                volumeState={mprState}
+                crosshair={crosshair}
+                sliceIdx={currentImageIndex}
+                onCrosshairChange={handleMprCrosshair}
+                dose={doseVisible && doseGrid && doseData ? {
+                  grid: doseGrid,
+                  geom: {
+                    imagePosition: doseData.imagePosition,
+                    imageOrientation: doseData.imageOrientation,
+                    pixelSpacing: doseData.pixelSpacing,
+                    gridFrameOffsetVector: doseData.gridFrameOffsetVector,
+                    columns: doseData.columns, rows: doseData.rows,
+                  },
+                  doseAtFull: (doseData.maxDose ?? 100) * (doseThreshold / 100),
+                  opacity: doseOpacity,
+                } : null}
+              />
+            </Box>
+          </Box>
+        )}
         </Box>
 
         {/* Right sidebar - per-module panels */}
