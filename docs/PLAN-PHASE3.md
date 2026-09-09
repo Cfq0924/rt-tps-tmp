@@ -156,3 +156,13 @@ M5a 剂量引擎 ──→ M5b 逆向优化（Phase 4）
 - **MPR spike 可能再次确认 GPU 黑屏**：时间盒控制，失败即关闭该项，不阻塞
 - **RTPLAN 最小导出的互操作性**：无 MLC 的 STATIC 计划可能被外部系统拒绝——
   导出说明中标注局限，真实互操作验收以 RTSTRUCT 为准
+
+---
+
+## 交付状态（2026-09）
+
+Phase 3 已全部交付：M1 DICOM RT 导出 ✓ · M2 刚性配准（含 EBRT 四视口重设计，
+MPR spike 按计划时间盒推迟）✓ · M3 计划 sums ✓ · M4 RT Peer Review ✓ ·
+M5a 剂量引擎选型报告 + 水等效原型 ✓。
+另外交付：三断面 CPU-MPR 查看器（§11.9，绕开 §9 GPU 限制）。
+后续路线见 **PLAN-PHASE4.md**。
