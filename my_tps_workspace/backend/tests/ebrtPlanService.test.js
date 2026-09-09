@@ -280,6 +280,29 @@ describe('ebrtPlanService', () => {
       assert.ok(Math.abs(plan.beams[0].jawX1 - (-111.125)) < 1e-3);
     });
 
+    it('persists per-control-point delivery data (incl. MLC) on import', async () => {
+      if (!RP_FILE) return; // same skip condition as above
+      const { default: Database } = await import('better-sqlite3');
+      const db = new Database(TEST_DB, { readonly: true });
+      const rpRow = db.prepare("SELECT id FROM dicom_files WHERE sop_instance_uid = '1.2.246.352.71.5.891085747523.430.20240606031847'").get();
+      const plan = db.prepare(`
+        SELECT p.id FROM ebrt_plans p
+        JOIN dicom_files f ON f.id = p.source_rtplan_file_id
+        WHERE f.sop_instance_uid = '1.2.246.352.71.5.891085747523.430.20240606031847'
+      `).get();
+      const cpCounts = db.prepare(`
+        SELECT b.beam_number as n, COUNT(c.id) as cps,
+               SUM(CASE WHEN c.mlc_json IS NOT NULL THEN 1 ELSE 0 END) as withMlc
+        FROM ebrt_beams b LEFT JOIN beam_control_points c ON c.beam_id = b.id
+        WHERE b.plan_id = ? GROUP BY b.id ORDER BY b.beam_number
+      `).all(plan.id);
+      db.close();
+      assert.strictEqual(cpCounts.length, 9);
+      assert.ok(cpCounts.every(c => c.cps > 0), 'every beam has control points');
+      assert.ok(cpCounts.some(c => c.withMlc > 0), 'IMRT beams carry MLC positions');
+      void rpRow;
+    });
+
     it('rejects import from non-RTPLAN files', async () => {
       const { default: Database } = await import('better-sqlite3');
       const db = new Database(TEST_DB);

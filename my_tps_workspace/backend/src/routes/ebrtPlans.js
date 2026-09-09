@@ -14,6 +14,14 @@ import {
   listTemplates,
   instantiateTemplate,
 } from '../services/ebrtPlanService.js';
+import {
+  listControlPoints,
+  replaceControlPoints,
+  listSubfields,
+  addSubfield,
+  deleteSubfield,
+  createOpposingField,
+} from '../services/beamModelService.js';
 
 const router = Router();
 
@@ -184,6 +192,97 @@ router.post('/templates/:id/instantiate', authMiddleware, (req, res, next) => {
       reqId: req.id,
     });
     res.status(201).json({ plan });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /ebrt/beams/:beamId/control-points — per-CP delivery data (incl. MLC)
+router.get('/beams/:beamId/control-points', authMiddleware, (req, res, next) => {
+  try {
+    const controlPoints = listControlPoints({
+      beamId: parseInt(req.params.beamId, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ controlPoints });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /ebrt/beams/:beamId/control-points — replace all control points
+router.put('/beams/:beamId/control-points', authMiddleware, (req, res, next) => {
+  try {
+    const controlPoints = replaceControlPoints({
+      beamId: parseInt(req.params.beamId, 10),
+      controlPoints: req.body?.controlPoints ?? [],
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ controlPoints });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /ebrt/beams/:beamId/subfields — add a field-in-field subfield
+router.post('/beams/:beamId/subfields', authMiddleware, (req, res, next) => {
+  try {
+    const subfield = addSubfield({
+      beamId: parseInt(req.params.beamId, 10),
+      name: req.body?.name,
+      weight: req.body?.weight,
+      mlc: req.body?.mlc,
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.status(201).json({ subfield });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /ebrt/beams/:beamId/subfields
+router.get('/beams/:beamId/subfields', authMiddleware, (req, res, next) => {
+  try {
+    const subfields = listSubfields({
+      beamId: parseInt(req.params.beamId, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ subfields });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /ebrt/beams/:beamId/subfields/:subfieldId
+router.delete('/beams/:beamId/subfields/:subfieldId', authMiddleware, (req, res, next) => {
+  try {
+    const result = deleteSubfield({
+      beamId: parseInt(req.params.beamId, 10),
+      subfieldId: parseInt(req.params.subfieldId, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /ebrt/plans/:planId/opposing-field — create the 180° opposing field
+router.post('/plans/:planId/opposing-field', authMiddleware, (req, res, next) => {
+  try {
+    const beam = createOpposingField({
+      planId: parseInt(req.params.planId, 10),
+      sourceBeamNumber: parseInt(req.body?.sourceBeamNumber, 10),
+      name: req.body?.name,
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.status(201).json({ beam });
   } catch (err) {
     next(err);
   }

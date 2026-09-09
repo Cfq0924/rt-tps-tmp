@@ -66,6 +66,51 @@ function extractJaws(controlPoint) {
 }
 
 /**
+ * Extract MLC leaf pairs (MLCX/MLCY) from a control point.
+ * @returns {{type:string, leafPairs:{x1:number,x2:number}[]}|null}
+ */
+function extractMLC(controlPoint) {
+  const devices = getSequence(controlPoint, 'BeamLimitingDevicePositionSequence');
+  for (const dev of devices) {
+    const type = str(dev.RTBeamLimitingDeviceType);
+    if (type !== 'MLCX' && type !== 'MLCY') continue;
+    const pos = dev.LeafJawPositions ?? dev.BeamLimitingDevicePosition;
+    if (!Array.isArray(pos) || pos.length < 2) continue;
+    const leafPairs = [];
+    for (let i = 0; i + 1 < pos.length; i += 2) {
+      leafPairs.push({ x1: num(pos[i]), x2: num(pos[i + 1]) });
+    }
+    return { type, leafPairs };
+  }
+  return null;
+}
+
+/** Leaf pair count from the beam's BeamLimitingDeviceSequence (MLCX). */
+function extractLeafPairCount(beam) {
+  const devices = getSequence(beam, 'BeamLimitingDeviceSequence');
+  for (const dev of devices) {
+    const type = str(dev.RTBeamLimitingDeviceType);
+    if (type === 'MLCX' || type === 'MLCY') {
+      return num(dev.NumberOfLeafJawPairs);
+    }
+  }
+  return null;
+}
+
+/** Per-control-point geometry/MLC snapshot (beam delivery sequence). */
+function extractControlPoints(controlPoints) {
+  return controlPoints.map((cp, idx) => ({
+    cpIndex: idx,
+    gantryAngle: num(cp.GantryAngle),
+    collimatorAngle: num(cp.BeamLimitingDeviceAngle),
+    couchAngle: num(cp.PatientSupportAngle),
+    cumulativeMetersetWeight: num(cp.CumulativeMetersetWeight),
+    mlc: extractMLC(cp),
+    jaws: extractJaws(cp),
+  }));
+}
+
+/**
  * Parse an RTPLAN file.
  * @param {string} filePath
  * @returns {Object} plan (JSON-able)
@@ -138,6 +183,8 @@ export async function parseRTPlan(filePath) {
         : null,
       jawPosition: extractJaws(cp0),
       finalCumulativeMetersetWeight: num(beam.FinalCumulativeMetersetWeight, 1),
+      leafPairCount: extractLeafPairCount(beam),
+      controlPoints: extractControlPoints(controlPoints),
     };
   });
 

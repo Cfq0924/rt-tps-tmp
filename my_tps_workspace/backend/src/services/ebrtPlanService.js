@@ -429,6 +429,26 @@ export async function createPlanFromRTPlan({ studyId, fileId, userId, reqId }) {
   });
   insertPlan();
 
+  // persist per-control-point delivery data (incl. MLC leaf positions) so
+  // the beam model / engine v2 can consume real modulation
+  const insertCP = db.prepare(`
+    INSERT INTO beam_control_points (beam_id, cp_index, gantry_angle, collimator_angle,
+      couch_angle, cumulative_meterset_weight, mlc_json)
+    VALUES ((SELECT id FROM ebrt_beams WHERE plan_id = ? AND beam_number = ?), ?, ?, ?, ?, ?, ?)
+  `);
+  const insertCPs = db.transaction(() => {
+    for (const b of parsed.beams) {
+      for (const cp of (b.controlPoints ?? [])) {
+        insertCP.run(
+          planId, b.beamNumber, cp.cpIndex, cp.gantryAngle, cp.collimatorAngle,
+          cp.couchAngle, cp.cumulativeMetersetWeight,
+          cp.mlc ? JSON.stringify(cp.mlc) : null,
+        );
+      }
+    }
+  });
+  insertCPs();
+
   auditLog(db, { reqId, userId, action: 'import_ebrt_plan_from_rtplan', resourceType: 'ebrt_plan', resourceId: planId, metadata: { studyId, fileId, beamCount: parsed.beams.length } });
 
   return getPlanWithBeams(db, planId);

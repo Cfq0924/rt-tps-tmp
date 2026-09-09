@@ -304,7 +304,45 @@ export function rtStructFromSegmentations({ studyId, segmentationIds, userId, re
  * @returns {Buffer}
  */
 export function buildRTPlanDataset({ study, plan, seriesUid, sopInstanceUid, date }) {
+  const cpDevices = (cp, b) => {
+    const devices = [
+      { RTBeamLimitingDeviceType: 'X', LeafJawPositions: [b.jawX1 ?? -50, b.jawX2 ?? 50] },
+      { RTBeamLimitingDeviceType: 'Y', LeafJawPositions: [b.jawY1 ?? -50, b.jawY2 ?? 50] },
+    ];
+    if (cp.mlc) {
+      devices.push({
+        RTBeamLimitingDeviceType: cp.mlc.type ?? 'MLCX',
+        LeafJawPositions: cp.mlc.leafPairs.flatMap(p => [p.x1, p.x2]),
+      });
+    }
+    return devices;
+  };
+
+  const baseCP = (idx, b, cp) => ({
+    ControlPointIndex: idx,
+    NominalBeamEnergy: b.energyMv ?? 6,
+    GantryAngle: cp?.gantryAngle
+      ?? (idx > 0 && b.gantryAngleStop != null ? b.gantryAngleStop : (b.gantryAngle ?? 0)),
+    GantryRotationDirection: 'CW',
+    BeamLimitingDeviceAngle: b.collimatorAngle ?? 0,
+    BeamLimitingDeviceRotationDirection: 'CW',
+    PatientSupportAngle: b.couchAngle ?? 0,
+    PatientSupportRotationDirection: 'CW',
+    CumulativeMetersetWeight: idx / Math.max(1, (b.controlPoints?.length ?? 1) - 1),
+    IsocenterPosition: idx === 0 ? [plan.isocenterX, plan.isocenterY, plan.isocenterZ] : undefined,
+    BeamLimitingDevicePositionSequence: cp
+      ? cpDevices(cp, b)
+      : [
+          { RTBeamLimitingDeviceType: 'X', LeafJawPositions: [b.jawX1 ?? -50, b.jawX2 ?? 50] },
+          { RTBeamLimitingDeviceType: 'Y', LeafJawPositions: [b.jawY1 ?? -50, b.jawY2 ?? 50] },
+        ],
+  });
+
   const beamDataset = (b) => {
+    const cps = b.controlPoints?.length
+      ? b.controlPoints
+      : [null, ...(b.beamType === 'VMAT' && b.gantryAngleStop != null ? [null] : [])];
+
     const beam = {
       BeamNumber: b.beamNumber,
       BeamName: b.name ?? `Beam ${b.beamNumber}`,
@@ -326,33 +364,9 @@ export function buildRTPlanDataset({ study, plan, seriesUid, sopInstanceUid, dat
       NumberOfBoli: 0,
       NumberOfBlocks: 0,
       FinalCumulativeMetersetWeight: 1,
-      CumulativeMetersetWeight: undefined,
-      NumberOfControlPoints: b.beamType === 'VMAT' && b.gantryAngleStop != null ? 2 : 1,
-      ControlPointSequence: [{
-        ControlPointIndex: 0,
-        NominalBeamEnergy: b.energyMv ?? 6,
-        GantryAngle: b.gantryAngle ?? 0,
-        GantryRotationDirection: 'CW',
-        BeamLimitingDeviceAngle: b.collimatorAngle ?? 0,
-        BeamLimitingDeviceRotationDirection: 'CW',
-        PatientSupportAngle: b.couchAngle ?? 0,
-        PatientSupportRotationDirection: 'CW',
-        CumulativeMetersetWeight: 0,
-        IsocenterPosition: [plan.isocenterX, plan.isocenterY, plan.isocenterZ],
-        BeamLimitingDevicePositionSequence: [
-          { RTBeamLimitingDeviceType: 'X', LeafJawPositions: [b.jawX1 ?? -50, b.jawX2 ?? 50] },
-          { RTBeamLimitingDeviceType: 'Y', LeafJawPositions: [b.jawY1 ?? -50, b.jawY2 ?? 50] },
-        ],
-      }],
+      NumberOfControlPoints: cps.length,
+      ControlPointSequence: cps.map((cp, idx) => baseCP(idx, b, cp)),
     };
-    if (b.beamType === 'VMAT' && b.gantryAngleStop != null) {
-      beam.ControlPointSequence.push({
-        ControlPointIndex: 1,
-        GantryAngle: b.gantryAngleStop,
-        GantryRotationDirection: 'CW',
-        CumulativeMetersetWeight: 1,
-      });
-    }
     return beam;
   };
 
@@ -401,11 +415,24 @@ export function rtPlanFromEbrtPlan({ planId, userId, reqId }) {
   const plan = getPlan({ id: planId, userId, reqId });
   const study = loadStudyMeta(db, plan.studyId);
 
+  // attach persisted per-CP delivery data (incl. MLC) for full fidelity export
+  const cpStmt = db.prepare('SELECT cp_index, gantry_angle, collimator_angle, couch_angle, cumulative_meterset_weight, mlc_json FROM beam_control_points WHERE beam_id = ? ORDER BY cp_index');
+  const beams = (plan.beams ?? []).map(b => ({
+    ...b,
+    controlPoints: cpStmt.all(b.id).map(cp => ({
+      gantryAngle: cp.gantry_angle,
+      collimatorAngle: cp.collimator_angle,
+      couchAngle: cp.couch_angle,
+      cumulativeMetersetWeight: cp.cumulative_meterset_weight,
+      mlc: cp.mlc_json ? JSON.parse(cp.mlc_json) : null,
+    })),
+  }));
+
   const sopInstanceUid = generateDicomUid();
   const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
   const buffer = buildRTPlanDataset({
     study,
-    plan,
+    plan: { ...plan, beams },
     seriesUid: generateDicomUid(),
     sopInstanceUid,
     date,
