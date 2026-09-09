@@ -21,12 +21,16 @@ import EvaluationPanel from '../modules/evaluation/EvaluationPanel.jsx';
 import EvaluationPane from '../modules/evaluation/EvaluationPane.jsx';
 import DoseProbeOverlay from '../modules/evaluation/DoseProbeOverlay.jsx';
 import { useDvh } from '../modules/evaluation/useDvh.js';
+import DVHChart from '../modules/evaluation/DVHChart.jsx';
 import { trilinearSample, findGlobalMax, voxelToPatient } from '../lib/doseSampling.js';
 import RegistrationOverlay from '../modules/registration/RegistrationOverlay.jsx';
 import RegistrationPanel from '../modules/registration/RegistrationPanel.jsx';
 import PlanSums from '../modules/doseSum/PlanSums.jsx';
 import MPRView from '../modules/mpr/MPRView.jsx';
 import { loadVolume } from '../lib/mprVolume.js';
+import EbrtLeftTree from '../modules/ebrt/EbrtLeftTree.jsx';
+import EbrtInfoTabs from '../modules/ebrt/EbrtInfoTabs.jsx';
+import AxialCrosshairOverlay from '../modules/ebrt/AxialCrosshairOverlay.jsx';
 import EbrtWorkspace from '../modules/ebrt/EbrtWorkspace.jsx';
 import { useEbrtPlans } from '../modules/ebrt/useEbrtPlans.js';
 import { registerCTPlaneMetadataProvider } from '../lib/ctMetadataProvider.js';
@@ -510,8 +514,11 @@ export default function StudyViewerPage() {
     [files],
   );
 
+  const isEbrtQuad = activeModule === 'ebrt';
+  const volumeViewActive = mprEnabled || isEbrtQuad;
+
   useEffect(() => {
-    if (!mprEnabled || mprState.volume || imageIds.length === 0) return;
+    if (!volumeViewActive || mprState.volume || imageIds.length === 0) return;
     let alive = true;
     setMprState({ volume: null, geom: null, progress: { loaded: 0, total: imageIds.length }, error: '' });
     loadVolume({
@@ -529,7 +536,7 @@ export default function StudyViewerPage() {
         if (alive) setMprState(s => ({ ...s, error: err.message, progress: null }));
       });
     return () => { alive = false; };
-  }, [mprEnabled, imageIds, ctFilesSorted, mprState.volume]);
+  }, [volumeViewActive, imageIds, ctFilesSorted, mprState.volume]);
 
   // keep the default crosshair centred once the geometry is known
   useEffect(() => {
@@ -540,6 +547,21 @@ export default function StudyViewerPage() {
       });
     }
   }, [mprState.geom]);
+
+  const mprDoseProps = useMemo(() => (
+    (doseVisible && doseGrid && doseData) ? {
+      grid: doseGrid,
+      geom: {
+        imagePosition: doseData.imagePosition,
+        imageOrientation: doseData.imageOrientation,
+        pixelSpacing: doseData.pixelSpacing,
+        gridFrameOffsetVector: doseData.gridFrameOffsetVector,
+        columns: doseData.columns, rows: doseData.rows,
+      },
+      doseAtFull: (doseData.maxDose ?? 100) * (doseThreshold / 100),
+      opacity: doseOpacity,
+    } : null
+  ), [doseVisible, doseGrid, doseData, doseThreshold, doseOpacity]);
 
   const handleMprCrosshair = useCallback((patch) => {
     if (patch.sliceIdx != null && patch.sliceIdx !== currentImageIndex) {
@@ -770,8 +792,29 @@ export default function StudyViewerPage() {
         )}
 
         {/* Main viewer (+ MPR column when enabled) */}
-        <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative', background: '#07111f' }}>
-        <Box sx={{ flex: mprActive ? 2 : 1, position: 'relative' }}>
+        <Box sx={isEbrtQuad ? {
+            flex: 1, display: 'grid', overflow: 'hidden', position: 'relative', background: '#07111f',
+            gridTemplateColumns: '240px minmax(0, 2fr) minmax(0, 1fr)',
+            gridTemplateRows: 'minmax(0, 1fr) minmax(0, 1fr) auto',
+          } : { flex: 1, display: 'flex', overflow: 'hidden', position: 'relative', background: '#07111f' }}>
+        {isEbrtQuad && (
+          <Box sx={{ gridColumn: 1, gridRow: '1 / 3', borderRight: '1px solid rgba(88,196,220,0.12)', overflow: 'auto' }}>
+            <EbrtLeftTree
+              structures={structures}
+              structureVisibility={structureVisibility}
+              onToggleStructure={handleToggleStructure}
+              isodoseLevels={isodoseLevels}
+              onIsodoseChange={setIsodoseLevels}
+              beams={ebrt.selectedPlan?.beams ?? null}
+              selectedBeamNumber={selectedBeamNumber}
+              onSelectBeam={setSelectedBeamNumber}
+              referencePoints={ebrt.selectedPlan?.referencePoints ?? null}
+              ctFiles={ctFilesSorted}
+              onJumpToSlice={handleJumpToSlice}
+            />
+          </Box>
+        )}
+        <Box sx={isEbrtQuad ? { gridColumn: 2, gridRow: 1, position: 'relative', minWidth: 0, minHeight: 0, overflow: 'hidden' } : { flex: mprActive ? 2 : 1, position: 'relative' }}>
           {error && (
             <Alert
               severity="error"
@@ -901,6 +944,16 @@ export default function StudyViewerPage() {
             />
           )}
 
+          {/* EBRT quad: axial crosshair reference lines */}
+          {isEbrtQuad && (
+            <AxialCrosshairOverlay
+              viewport={viewportInstance}
+              ctGeom={ctGeom}
+              ctZ={currentCTZ}
+              crosshair={crosshair}
+            />
+          )}
+
           {/* P3-M2 registration overlay: moving series with the current transform */}
           {activeModule === 'registration' && movingState.movingUid && (
             <RegistrationOverlay
@@ -937,6 +990,51 @@ export default function StudyViewerPage() {
               />
             </Box>
           )}
+
+        {/* EBRT quad: DVH pane (TR), coronal + sagittal (BL/BR), info tabs (bottom) */}
+        {isEbrtQuad && (
+          <Box sx={{ gridColumn: 3, gridRow: 1, position: 'relative', minWidth: 0, minHeight: 0,
+                     overflow: 'hidden', borderLeft: '1px solid rgba(88,196,220,0.12)', p: 0.5, boxSizing: 'border-box' }}>
+            <DVHChart results={dvh.results} prescriptionCgy={prescriptionCgy} />
+          </Box>
+        )}
+        {isEbrtQuad && (
+          <Box sx={{ gridColumn: 2, gridRow: 2, position: 'relative', minWidth: 0, minHeight: 0,
+                     overflow: 'hidden', borderTop: '1px solid rgba(88,196,220,0.12)' }}>
+            <MPRView
+              orientation="coronal"
+              volumeState={mprState}
+              crosshair={crosshair}
+              sliceIdx={currentImageIndex}
+              onCrosshairChange={handleMprCrosshair}
+              dose={mprDoseProps}
+            />
+          </Box>
+        )}
+        {isEbrtQuad && (
+          <Box sx={{ gridColumn: 3, gridRow: 2, position: 'relative', minWidth: 0, minHeight: 0,
+                     overflow: 'hidden', borderLeft: '1px solid rgba(88,196,220,0.12)', borderTop: '1px solid rgba(88,196,220,0.12)' }}>
+            <MPRView
+              orientation="sagittal"
+              volumeState={mprState}
+              crosshair={crosshair}
+              sliceIdx={currentImageIndex}
+              onCrosshairChange={handleMprCrosshair}
+              dose={mprDoseProps}
+            />
+          </Box>
+        )}
+        {isEbrtQuad && (
+          <Box sx={{ gridColumn: '1 / -1', gridRow: 3, height: 170 }}>
+            <EbrtInfoTabs
+              plan={ebrt.selectedPlan}
+              dvhResults={dvh.results}
+              doseGrid={doseGrid}
+              doseMeta={doseData}
+              prescriptionCgy={prescriptionCgy}
+            />
+          </Box>
+        )}
 
         {mprActive && (
           <Box sx={{ width: '30%', minWidth: 260, display: 'flex', flexDirection: 'column',
