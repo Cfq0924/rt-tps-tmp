@@ -69,12 +69,24 @@ export default function MPRView({
 
       const ox0 = 4, oy0 = 4; // label margin
       if (!sample || !geom) {
-        ctx.fillStyle = 'rgba(148,163,184,0.6)';
-        ctx.font = '12px "IBM Plex Mono", monospace';
-        ctx.fillText(volumeState?.error ?? 'loading volume…', 14, 24);
-        if (volumeState?.progress) {
-          ctx.fillText(`${volumeState.progress.loaded}/${volumeState.progress.total}`, 14, 44);
+        // centred loading state: bar + percentage
+        const msg = volumeState?.error ?? 'Reconstructing volume…';
+        const prog = volumeState?.progress;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(148,163,184,0.9)';
+        ctx.font = '13px "IBM Plex Mono", monospace';
+        ctx.fillText(msg, rect.width / 2, rect.height / 2 - 18);
+        if (prog) {
+          const frac = prog.total ? prog.loaded / prog.total : 0;
+          const bw = Math.min(240, rect.width * 0.5);
+          ctx.strokeStyle = 'rgba(88,196,220,0.5)';
+          ctx.strokeRect(rect.width / 2 - bw / 2, rect.height / 2, bw, 8);
+          ctx.fillStyle = '#58c4dc';
+          ctx.fillRect(rect.width / 2 - bw / 2, rect.height / 2, bw * frac, 8);
+          ctx.fillStyle = 'rgba(148,163,184,0.9)';
+          ctx.fillText(`${prog.loaded} / ${prog.total} slices`, rect.width / 2, rect.height / 2 + 28);
         }
+        ctx.textAlign = 'left';
         return;
       }
 

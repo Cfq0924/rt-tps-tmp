@@ -53,6 +53,7 @@ export default function ViewerViewport({
   const lastSetIndexRef = useRef(currentImageIndex);
   // Track what triggered the last index change to avoid feedback loops
   const scrollSourceRef = useRef('init'); // 'init' | 'parent' | 'internal'
+  const layoutRORef = useRef(null);       // keeps the canvas fitted to its container
   // The imageId whose stack is (being) loaded — guards against duplicate
   // stack loading from React StrictMode double-invoked effects
   const loadedStackForRef = useRef(null);
@@ -164,6 +165,14 @@ export default function ViewerViewport({
         viewportRef.current = renderingEngine.getViewport(VIEWPORT_ID);
         setViewportReady(true);
 
+        // keep the canvas sized to its container when the layout changes
+        // (e.g. EBRT quad / MPR column switching) — without this the canvas
+        // keeps its initial size and the image floats in a corner
+        layoutRORef.current = new ResizeObserver(() => {
+          try { renderingEngine.resize(true, true); } catch { /* mid-teardown */ }
+        });
+        layoutRORef.current.observe(element);
+
         if (mounted) {
           setIsReady(true);
         }
@@ -178,6 +187,7 @@ export default function ViewerViewport({
 
     return () => {
       mounted = false;
+      layoutRORef.current?.disconnect();
       if (renderingEngineRef.current) {
         renderingEngineRef.current.destroy();
       }

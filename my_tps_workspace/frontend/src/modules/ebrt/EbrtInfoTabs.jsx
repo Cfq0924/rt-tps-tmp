@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Box, Typography, Tabs, Tab, Table, TableBody, TableCell, TableHead,
-  TableRow } from '@mui/material';
+  TableRow, TextField, Button } from '@mui/material';
 import { trilinearSample } from '../../lib/doseSampling.js';
 
 /**
@@ -14,9 +14,23 @@ import { trilinearSample } from '../../lib/doseSampling.js';
  * @param {Float32Array|null} props.doseGrid
  * @param {Object|null} props.doseMeta
  * @param {number|null} props.prescriptionCgy
+ * @param {Function|null} props.onPatchCalcModels - ({volumeDose}) => void (persist calc models)
  */
-export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = null, doseMeta = null, prescriptionCgy = null }) {
+export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = null, doseMeta = null, prescriptionCgy = null, onPatchCalcModels = null }) {
   const [tab, setTab] = useState(0);
+  const [calcDraft, setCalcDraft] = useState(null);
+
+  // sync the editable calc-model draft when the selected plan changes
+  useEffect(() => {
+    const cm = plan?.calcModels ?? null;
+    setCalcDraft(cm ? {
+      algorithm: cm.volumeDose?.algorithm ?? '',
+      gridSizeMm: cm.volumeDose?.gridSizeMm ?? 3,
+      x1: cm.volumeDose?.calcVolume?.x1 ?? '', x2: cm.volumeDose?.calcVolume?.x2 ?? '',
+      y1: cm.volumeDose?.calcVolume?.y1 ?? '', y2: cm.volumeDose?.calcVolume?.y2 ?? '',
+      z1: cm.volumeDose?.calcVolume?.z1 ?? '', z2: cm.volumeDose?.calcVolume?.z2 ?? '',
+    } : null);
+  }, [plan?.id, plan?.calcModels]);
 
   const beams = plan?.beams ?? [];
   const referencePoints = plan?.referencePoints ?? [];
@@ -160,32 +174,68 @@ export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = 
         )}
 
         {tab === 3 && (
-          <Table size="small" sx={{ '& .MuiTableCell-root': cellSx }}>
-            <TableHead>
-              <TableRow>
-                {['Type', 'Calculation Type', 'Status'].map(h => (
-                  <TableCell key={h} sx={headSx}>{h}</TableCell>
-                ))}
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {[
-                ['Volume Dose', 'Water-equivalent v1 (P3-M5a prototype)', 'OK'],
-                ['Stereotactic Dose', '—', 'Not supported'],
-                ['DVH Estimation', 'Direct computation (useDvh)', 'OK'],
-                ['Compensator', '—', 'Not supported'],
-                ['Portal Dose', '—', 'Not supported'],
-                ['Beam Angle Optimization', '—', 'Not supported'],
-                ['Optimization', '—', 'Not supported'],
-              ].map(([type, calc, status]) => (
-                <TableRow key={type} hover>
-                  <TableCell>{type}</TableCell>
-                  <TableCell>{calc}</TableCell>
-                  <TableCell sx={{ color: status === 'OK' ? '#9ae66e' : 'text.disabled' }}>{status}</TableCell>
+          <>
+            <Table size="small" sx={{ '& .MuiTableCell-root': cellSx }}>
+              <TableHead>
+                <TableRow>
+                  {['Type', 'Calculation Type', 'Status'].map(h => (
+                    <TableCell key={h} sx={headSx}>{h}</TableCell>
+                  ))}
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHead>
+              <TableBody>
+                {[
+                  ['Volume Dose', 'Water-equivalent v1 (P3-M5a prototype)', 'OK'],
+                  ['Stereotactic Dose', '—', 'Not supported'],
+                  ['DVH Estimation', 'Direct computation (useDvh)', 'OK'],
+                  ['Compensator', '—', 'Not supported'],
+                  ['Portal Dose', '—', 'Not supported'],
+                  ['Beam Angle Optimization', '—', 'Not supported'],
+                  ['Optimization', '—', 'Not supported'],
+                ].map(([type, calc, status]) => (
+                  <TableRow key={type} hover>
+                    <TableCell>{type}</TableCell>
+                    <TableCell>{calc}</TableCell>
+                    <TableCell sx={{ color: status === 'OK' ? '#9ae66e' : 'text.disabled' }}>{status}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+
+            {onPatchCalcModels && (
+              <Box sx={{ px: 0.75, py: 0.75, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                <Typography variant="caption" sx={{ fontSize: '0.58rem', color: 'text.secondary', fontFamily: 'mono' }}>
+                  VOLUME DOSE MODEL
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                  <TextField size="small" label="Algorithm" value={calcDraft?.algorithm ?? ''}
+                             onChange={e => setCalcDraft(d => ({ ...d, algorithm: e.target.value }))}
+                             sx={{ flex: 1 }} inputProps={{ style: { fontSize: '0.62rem' } }} />
+                  <TextField size="small" label="Grid (mm)" type="number" value={calcDraft?.gridSizeMm ?? 3}
+                             onChange={e => setCalcDraft(d => ({ ...d, gridSizeMm: Number(e.target.value) }))}
+                             sx={{ width: 90 }} inputProps={{ step: 0.5, min: 1, max: 5, style: { fontSize: '0.62rem' } }} />
+                  <Button size="small" variant="contained"
+                          onClick={() => onPatchCalcModels({
+                            volumeDose: {
+                              algorithm: calcDraft?.algorithm ?? '',
+                              gridSizeMm: Number(calcDraft?.gridSizeMm) || 3,
+                              calcVolume: {
+                                x1: Number(calcDraft?.x1) || null, x2: Number(calcDraft?.x2) || null,
+                                y1: Number(calcDraft?.y1) || null, y2: Number(calcDraft?.y2) || null,
+                                z1: Number(calcDraft?.z1) || null, z2: Number(calcDraft?.z2) || null,
+                              },
+                            },
+                          })}
+                          sx={{ fontSize: '0.6rem' }}>
+                    Save
+                  </Button>
+                </Box>
+                <Typography variant="caption" sx={{ fontSize: '0.55rem', color: 'text.disabled' }}>
+                  Calculation volume bounds (mm, optional) crop the dose grid.
+                </Typography>
+              </Box>
+            )}
+          </>
         )}
       </Box>
     </Box>
