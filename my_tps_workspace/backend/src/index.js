@@ -21,6 +21,7 @@ import registrationRoutes from './routes/registration.js';
 import doseSumsRoutes from './routes/doseSums.js';
 import doseEngineRoutes from './routes/doseEngine.js';
 import coursesRoutes from './routes/courses.js';
+import normalizeRoutes from './routes/normalize.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -101,6 +102,7 @@ app.use('/api/registration', authMiddleware, registrationRoutes);
 app.use('/api/dose-sums', authMiddleware, doseSumsRoutes);
 app.use('/api/dose-engine', authMiddleware, doseEngineRoutes);
 app.use('/api/courses', authMiddleware, coursesRoutes);
+app.use('/api/ebrt-normalize', authMiddleware, normalizeRoutes);
 
 // Error handling
 app.use(notFoundHandler);

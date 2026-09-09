@@ -183,6 +183,20 @@ CREATE TABLE IF NOT EXISTS beam_subfields (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Plan revisions (Eclipse Revisions): full snapshots of a plan (scalars +
+-- beams + reference points) captured at approval time or manually.
+CREATE TABLE IF NOT EXISTS plan_revisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id INTEGER NOT NULL REFERENCES ebrt_plans(id) ON DELETE CASCADE,
+  revision_no INTEGER NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  created_by INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(plan_id, revision_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_revisions_plan ON plan_revisions(plan_id);
+
 -- RT Peer Review (Eclipse Ch5): a review session collects reviewer comments
 -- on a workspace plan; closing it records the decision (which also updates
 -- the plan's approval status). One OPEN session per plan, enforced in service.

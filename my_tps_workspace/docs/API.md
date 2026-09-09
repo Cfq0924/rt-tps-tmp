@@ -586,6 +586,84 @@ model, NOT clinically validated (see docs/REPORT-DOSE-ENGINE-5A.md).
 
 ---
 
+## Courses
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/courses/study/:studyId` | List courses (with plan counts) |
+| `POST` | `/courses/study/:studyId` | Create course (`{name, intent?}`) |
+| `PATCH` | `/courses/:id` | Update course |
+| `DELETE` | `/courses/:id` | Delete course (plans survive, course_id cleared) |
+
+Plan prescription model: `ebrt_plans` accepts `course_id`, `target_structure_name`,
+`dose_per_fraction_gy`, `primary_point_name`; reference points gain DPV
+semantics (`type: TARGET\|POINT`, `isDpv`, `totalDoseLimitGy`, `dailyDoseGy` —
+DPVs may omit the location).
+
+---
+
+## Beam Model
+
+Per-control-point delivery data and field-in-field subfields.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET/PUT` | `/ebrt/beams/:beamId/control-points` | List / replace control points (validated: leaf counts, ±200 mm travel, non-decreasing meterset) |
+| `GET/POST` | `/ebrt/beams/:beamId/subfields` | List / add field-in-field subfields |
+| `DELETE` | `/ebrt/beams/:beamId/subfields/:subfieldId` | Delete a subfield |
+| `POST` | `/ebrt/plans/:planId/opposing-field` | Create the 180° opposing field (`{sourceBeamNumber, name?}`) |
+
+RTPLAN import persists per-control-point MLC leaf positions; RTPLAN export
+writes them back when present.
+
+---
+
+## Normalization
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/ebrt-normalize/plans/:planId/normalize` | Rescale the plan's dose grid (`{mode, value?}`) |
+
+Modes: `TARGET_MAX/TARGET_MEAN/TARGET_MIN` (target statistic = `value`% of
+Rx), `PERCENT_OF_TARGET` (target mean = `value` cGy), `ISOCENTER` (iso voxel =
+`value`% of Rx), `VALUE` (scale × `value`/100). Rewrites DoseGridScaling in
+the RTDOSE file in place (pixel data untouched) and invalidates the grid cache.
+
+---
+
+## Approval hardening & Revisions
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/ebrt/plans/:planId/approval-checks` | Pre-approval validation: `{errors, warnings, canApprove}` |
+| `POST` | `/ebrt/plans/:planId/revisions` | Manual snapshot |
+| `GET` | `/ebrt/plans/:planId/revisions` | Revision history |
+| `GET` | `/ebrt/plans/:planId/revisions/:revisionNo` | Full snapshot |
+| `POST` | `/ebrt/plans/:planId/revisions/rollback` | Restore a revision (`{revisionNo}`) — recorded as a new head |
+
+Peer review close accepts an optional `deltaCouch` `{x, y, z, rotation}`
+recorded on the plan. Approving a plan (via PATCH or peer review close)
+runs the validation first — errors block the transition and a revision
+snapshot is captured automatically.
+
+---
+
+## Couch structures
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/ebrt/studies/:studyId/couch-structure` | Generate a couch ROI over the CT extent (`{topOffsetMm?, widthMm?, thicknessMm?, name?}`) |
+
+---
+
+## Reference point dose report
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/ebrt/plans/:planId/point-doses` | Per-point dose from the study dose grid (`?doseFileId=` optional) |
+
+---
+
 ## Error Responses
 
 All errors follow this format:

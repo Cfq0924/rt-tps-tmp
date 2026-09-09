@@ -15,6 +15,13 @@ import {
   instantiateTemplate,
 } from '../services/ebrtPlanService.js';
 import {
+  approvalChecks,
+  captureRevision,
+  listRevisions,
+  getRevision,
+  rollbackToRevision,
+} from '../services/ebrtPlanService.js';
+import {
   listControlPoints,
   replaceControlPoints,
   listSubfields,
@@ -22,6 +29,7 @@ import {
   deleteSubfield,
   createOpposingField,
 } from '../services/beamModelService.js';
+import { generateCouchStructure, referencePointDoses } from '../services/couchService.js';
 
 const router = Router();
 
@@ -267,6 +275,112 @@ router.delete('/beams/:beamId/subfields/:subfieldId', authMiddleware, (req, res,
       reqId: req.id,
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /ebrt/plans/:planId/point-doses — reference point dose report
+router.get('/plans/:planId/point-doses', authMiddleware, async (req, res, next) => {
+  try {
+    const points = await referencePointDoses({
+      planId: parseInt(req.params.planId, 10),
+      doseFileId: req.query.doseFileId != null ? parseInt(req.query.doseFileId, 10) : null,
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ points });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /studies/:studyId/couch-structure — generate a couch ROI
+// body: { topOffsetMm?, widthMm?, thicknessMm?, name? }
+router.post('/studies/:studyId/couch-structure', authMiddleware, (req, res, next) => {
+  try {
+    const result = generateCouchStructure({
+      studyId: parseInt(req.params.studyId, 10),
+      topOffsetMm: req.body?.topOffsetMm != null ? Number(req.body.topOffsetMm) : 20,
+      widthMm: req.body?.widthMm != null ? Number(req.body.widthMm) : 400,
+      thicknessMm: req.body?.thicknessMm != null ? Number(req.body.thicknessMm) : 40,
+      name: req.body?.name ?? 'Couch Surface',
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /ebrt/plans/:planId/approval-checks — pre-approval validation
+router.get('/plans/:planId/approval-checks', authMiddleware, (req, res, next) => {
+  try {
+    const checks = approvalChecks({
+      planId: parseInt(req.params.planId, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json(checks);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /ebrt/plans/:planId/revisions — revision history (metadata)
+router.get('/plans/:planId/revisions', authMiddleware, (req, res, next) => {
+  try {
+    const revisions = listRevisions({
+      planId: parseInt(req.params.planId, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ revisions });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /ebrt/plans/:planId/revisions/:revisionNo — full snapshot
+router.get('/plans/:planId/revisions/:revisionNo', authMiddleware, (req, res, next) => {
+  try {
+    const revision = getRevision({
+      planId: parseInt(req.params.planId, 10),
+      revisionNo: parseInt(req.params.revisionNo, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ revision });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /ebrt/plans/:planId/revisions — manual snapshot
+router.post('/plans/:planId/revisions', authMiddleware, (req, res, next) => {
+  try {
+    const revisionNo = captureRevision({
+      planId: parseInt(req.params.planId, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.status(201).json({ revisionNo });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /ebrt/plans/:planId/revisions/rollback — { revisionNo }
+router.post('/plans/:planId/revisions/rollback', authMiddleware, (req, res, next) => {
+  try {
+    const plan = rollbackToRevision({
+      planId: parseInt(req.params.planId, 10),
+      revisionNo: parseInt(req.body?.revisionNo, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ plan });
   } catch (err) {
     next(err);
   }

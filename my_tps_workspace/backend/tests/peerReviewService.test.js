@@ -23,8 +23,8 @@ async function setupSchema() {
 
   // three plans: REVIEWED (reviewable), UNAPPROVED (blocked), APPROVED (blocked)
   db.prepare(`
-    INSERT INTO ebrt_plans (study_id, name, prescription_dose_gy, number_of_fractions, approval_status)
-    VALUES (?, 'Reviewed Plan', 60, 30, 'REVIEWED')
+    INSERT INTO ebrt_plans (study_id, name, prescription_dose_gy, number_of_fractions, approval_status, isocenter_x, isocenter_y, isocenter_z)
+    VALUES (?, 'Reviewed Plan', 60, 30, 'REVIEWED', 1, 2, 3)
   `).run(STUDY_ID);
   db.prepare(`
     INSERT INTO ebrt_plans (study_id, name, prescription_dose_gy, number_of_fractions, approval_status)
@@ -34,6 +34,12 @@ async function setupSchema() {
     INSERT INTO ebrt_plans (study_id, name, prescription_dose_gy, number_of_fractions, approval_status)
     VALUES (?, 'Approved Plan', 60, 30, 'APPROVED')
   `).run(STUDY_ID);
+
+  // the reviewed plan needs a beam (approval checks require beams)
+  db.prepare(`
+    INSERT INTO ebrt_beams (plan_id, beam_number, name, beam_type, gantry_angle, weight)
+    SELECT id, 1, 'AP', 'STATIC', 0, 1 FROM ebrt_plans WHERE name = 'Reviewed Plan'
+  `).run();
 
   // a user for author-name resolution
   db.prepare("INSERT INTO users (email, password_hash, name) VALUES ('reviewer@tps.local', 'x', 'Dr. Reviewer')").run();

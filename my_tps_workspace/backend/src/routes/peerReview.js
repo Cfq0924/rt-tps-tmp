@@ -80,6 +80,7 @@ router.post('/sessions/:id/close', authMiddleware, (req, res, next) => {
     const session = closeSession({
       sessionId: parseInt(req.params.id, 10),
       decision: req.body?.decision,
+      deltaCouch: req.body?.deltaCouch,
       userId: req.user.userId,
       userEmail: req.user.email,
       reqId: req.id,

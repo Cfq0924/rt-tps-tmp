@@ -217,6 +217,35 @@ export async function computeWaterDose({ studyId, referenceDoseFileId, planId, p
     beamInfo.push({ beamNumber: beam.beamNumber, gantryAngle: beam.gantryAngle ?? 0, halfW, halfY, weight });
   }
 
+  // B4 calculation volume: crop the grid to the requested bounds (voxels
+  // outside the volume get zero dose). Volume in patient mm, inclusive.
+  const cv = plan.calcModels?.volumeDose?.calcVolume;
+  if (cv && typeof cv === 'object') {
+    const bx = [cv.x1, cv.x2], by = [cv.y1, cv.y2], bz = [cv.z1, cv.z2];
+    for (let k = 0; k < numberOfFrames; k++) {
+      const z = voxelZ(k);
+      for (let j = 0; j < rows; j++) {
+        const y = imagePosition.y + j * pixelSpacing.i;
+        if (y < Math.min(...by) || y > Math.max(...by)) {
+          total.fill(0, k * rows * columns + j * columns, k * rows * columns + (j + 1) * columns);
+          continue;
+        }
+        for (let i = 0; i < columns; i++) {
+          const x = imagePosition.x + i * pixelSpacing.j;
+          if (x < Math.min(...bx) || x > Math.max(...bx)) {
+            total[k * rows * columns + j * columns + i] = 0;
+          }
+        }
+      }
+    }
+    for (let k = 0; k < numberOfFrames; k++) {
+      const z = voxelZ(k);
+      if (z < Math.min(...bz) || z > Math.max(...bz)) {
+        total.fill(0, k * rows * columns, (k + 1) * rows * columns);
+      }
+    }
+  }
+
   // isocentre normalisation: scale so the voxel nearest the isocentre hits
   // prescriptionCgy (fallback: grid max) when prescriptionCgy provided
   let normalisation = { strategy: 'none', factor: 1 };

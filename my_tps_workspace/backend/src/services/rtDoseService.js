@@ -325,6 +325,11 @@ export function calculateDoseValue(pixelData, doseGridScaling, doseUnits = 'GY')
 const gridCache = new Map();
 const GRID_CACHE_MAX = 4;
 
+/** Drop the cached grid for a file (call after in-place dose rewrites). */
+export function invalidateDoseGrid(fileId) {
+  gridCache.delete(fileId);
+}
+
 /**
  * Load a dose file's grid in cGy with geometry (cached per fileId).
  * Shared by the grid endpoint and the dose-sum service.

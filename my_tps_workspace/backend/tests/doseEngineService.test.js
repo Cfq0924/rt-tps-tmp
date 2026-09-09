@@ -179,6 +179,29 @@ describe('doseEngineService', () => {
       assert.strictEqual(grid.doseType, 'CALCULATED');
     });
 
+    it('crops the grid to the calculation volume when set (B4)', async () => {
+      // set calc volume covering only slice z ≥ -898.5 → frame 0 (z=-900) zeroed
+      const db = (await import('../src/db/init.js')).getDb();
+      db.prepare("UPDATE ebrt_plans SET calc_models_json = ? WHERE id = ?")
+        .run(JSON.stringify({ volumeDose: { algorithm: 'WaterEq v1', gridSizeMm: 3, calcVolume: { x1: -100, x2: 100, y1: -100, y2: 100, z1: -898.5, z2: -890 } } }), ctx.planId);
+      const result = await svc.computeAndStoreDose({
+        studyId: STUDY_ID,
+        referenceDoseFileId: ctx.referenceDoseFileId,
+        planId: ctx.planId,
+        prescriptionCgy: 200,
+        userId: 1,
+        reqId: 't',
+      });
+      const { getDoseGrid } = await import('../src/services/rtDoseService.js');
+      const grid = await getDoseGrid(result.doseFileId, {}, 't');
+      const frame0 = grid.grid.slice(0, 36);
+      const frame1 = grid.grid.slice(36, 72);
+      assert.ok(frame0.every(v => v === 0), 'frame 0 must be zero outside calc volume');
+      assert.ok(frame1.some(v => v > 0), 'frame 1 keeps dose');
+      // restore
+      db.prepare("UPDATE ebrt_plans SET calc_models_json = NULL WHERE id = ?").run(ctx.planId);
+    });
+
     it('keeps every voxel non-negative and stores a parseable file', async () => {
       const { getDoseGrid } = await import('../src/services/rtDoseService.js');
       const grid = await getDoseGrid(result.doseFileId, {}, 't');

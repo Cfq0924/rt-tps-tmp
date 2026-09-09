@@ -168,17 +168,31 @@ export function addComment({ sessionId, text, location, userId, userEmail, reqId
   return getSessionWithComments(db, sessionId);
 }
 
-export function closeSession({ sessionId, decision, userId, userEmail, reqId }) {
+export function closeSession({ sessionId, decision, deltaCouch, userId, userEmail, reqId }) {
   const db = getDb();
   if (!DECISIONS.has(decision)) {
     throw Object.assign(new Error('decision must be APPROVED or UNAPPROVED'), { status: 400 });
+  }
+  if (deltaCouch != null) {
+    if (typeof deltaCouch !== 'object' || Array.isArray(deltaCouch)) {
+      throw Object.assign(new Error('deltaCouch must be an object'), { status: 400 });
+    }
+    for (const k of ['x', 'y', 'z', 'rotation']) {
+      if (deltaCouch[k] !== undefined && !Number.isFinite(Number(deltaCouch[k]))) {
+        throw Object.assign(new Error(`deltaCouch.${k} must be numeric`), { status: 400 });
+      }
+    }
   }
   const session = sessionRow(db, sessionId);
   if (session.status !== 'OPEN') {
     throw Object.assign(new Error('Session is already closed'), { status: 400 });
   }
 
-  // decision also becomes the plan's approval status (validated + audited there)
+  // decision also becomes the plan's approval status (validated + audited there);
+  // a delta couch shift can accompany the approval (Eclipse Delta Couch Editor)
+  if (deltaCouch != null) {
+    updatePlan({ id: session.planId, payload: { delta_couch_json: deltaCouch }, userId, reqId });
+  }
   updatePlan({ id: session.planId, payload: { approval_status: decision }, userId, reqId });
 
   db.prepare(`
@@ -190,7 +204,9 @@ export function closeSession({ sessionId, decision, userId, userEmail, reqId }) 
     reqId, userId: userId ?? null,
     action: 'peer_review_close',
     resourceType: 'peer_review_session', resourceId: sessionId,
-    metadata: { decision, reviewer: reviewerName(db, userId, userEmail), planId: session.planId },
+    metadata: { decision, reviewer: reviewerName(db, userId, userEmail), planId: session.planId, deltaCouch: deltaCouch ?? null },
   });
-  return getSessionWithComments(db, sessionId);
+  const result = getSessionWithComments(db, sessionId);
+  if (deltaCouch != null) result.deltaCouch = deltaCouch;
+  return result;
 }

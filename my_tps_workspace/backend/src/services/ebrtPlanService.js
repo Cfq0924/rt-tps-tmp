@@ -231,6 +231,20 @@ const UPDATABLE_PLAN_FIELDS = new Set([
 
 export function updatePlan({ id, payload = {}, userId, reqId }) {
   const db = getDb();
+  // approval transition: run the pre-approval validation and snapshot the plan
+  if (payload.approval_status === 'APPROVED') {
+    const current = getPlan({ id, userId, reqId });
+    if (current.approvalStatus !== 'APPROVED') {
+      const checks = approvalChecks({ planId: id, userId, reqId });
+      if (!checks.canApprove) {
+        throw Object.assign(
+          new Error(`Cannot approve: ${checks.errors.join('; ')}`),
+          { status: 400, details: checks.errors },
+        );
+      }
+      captureRevision({ planId: id, userId, reqId });
+    }
+  }
   const updates = [];
   const values = [];
   for (const [k, v] of Object.entries(payload)) {
@@ -573,4 +587,144 @@ export function instantiateTemplate({ templateId, studyId, name, userId, reqId }
 
   auditLog(db, { reqId, userId, action: 'instantiate_ebrt_template', resourceType: 'ebrt_plan', resourceId: planId, metadata: { templateId, studyId, beamCount: src.beams.length } });
   return getPlanWithBeams(db, planId);
+}
+
+// ---------- B6: approval checks, delta couch, plan revisions ----------
+
+/**
+ * Pre-approval validation (Eclipse Plan Approval warnings & errors dialog):
+ * errors block approval, warnings do not.
+ * @returns {{planId:number, approvalStatus:string, errors:string[], warnings:string[], canApprove:boolean}}
+ */
+export function approvalChecks({ planId, userId, reqId }) {
+  const plan = getPlan({ id: planId, userId, reqId });
+  const errors = [];
+  const warnings = [];
+  const beams = plan.beams ?? [];
+
+  if (beams.length === 0) errors.push('Plan has no beams');
+  if (!plan.prescriptionDoseGy || plan.prescriptionDoseGy <= 0) errors.push('Plan has no prescription dose');
+  if (plan.isocenterX == null && plan.isocenterY == null && plan.isocenterZ == null) {
+    errors.push('Plan has no isocentre');
+  }
+  for (const b of beams) {
+    if (b.jawX1 != null && b.jawX2 != null && b.jawX1 > b.jawX2) {
+      errors.push(`Beam ${b.beamNumber}: jaw X1 > X2`);
+    }
+    if (b.jawY1 != null && b.jawY2 != null && b.jawY1 > b.jawY2) {
+      errors.push(`Beam ${b.beamNumber}: jaw Y1 > Y2`);
+    }
+  }
+
+  if (!plan.targetStructureName) warnings.push('No plan target structure set');
+  if (!plan.referencePoints?.some(p => p.isDpv)) warnings.push('No dose prescription volume (DPV) point');
+  const wSum = beams.reduce((a, b) => a + (b.weight ?? 0), 0);
+  if (beams.length > 0 && Math.abs(wSum - 1) > 0.01) {
+    warnings.push(`Beam weights sum to ${wSum.toFixed(3)} — Eclipse expects 1.0 for 100% at isocentre`);
+  }
+  for (const b of beams) {
+    if (b.beamType === 'VMAT' && b.gantryAngleStop == null) {
+      warnings.push(`Beam ${b.beamNumber}: VMAT arc has no stop angle`);
+    }
+    if (b.wedgeAngle != null && b.bolus) {
+      warnings.push(`Beam ${b.beamNumber}: wedge and bolus combined — verify intent`);
+    }
+  }
+
+  return {
+    planId,
+    approvalStatus: plan.approvalStatus,
+    errors,
+    warnings,
+    canApprove: errors.length === 0,
+  };
+}
+
+/** Append a snapshot of the plan (scalars + beams + reference points). */
+export function captureRevision({ planId, userId, reqId }) {
+  const db = getDb();
+  const plan = getPlanWithBeams(db, planId);
+  const last = db.prepare('SELECT MAX(revision_no) as n FROM plan_revisions WHERE plan_id = ?').get(planId);
+  const revisionNo = (last?.n ?? 0) + 1;
+  db.prepare(`
+    INSERT INTO plan_revisions (plan_id, revision_no, snapshot_json, created_by)
+    VALUES (?, ?, ?, ?)
+  `).run(planId, revisionNo, JSON.stringify({
+    plan,
+    beams: plan.beams,
+    referencePoints: plan.referencePoints,
+  }), userId ?? null);
+  auditLog(db, {
+    reqId, userId,
+    action: 'capture_plan_revision',
+    resourceType: 'ebrt_plan', resourceId: planId,
+    metadata: { revisionNo },
+  });
+  return revisionNo;
+}
+
+const REVISION_RESTORABLE = [
+  'name', 'machine_name', 'energy_mv', 'prescription_dose_gy', 'number_of_fractions',
+  'normalization', 'optimization_algorithm', 'dose_algorithm', 'grid_size_mm',
+  'heterogeneity_correction', 'isocenter_x', 'isocenter_y', 'isocenter_z',
+  'target_structure_name', 'dose_per_fraction_gy', 'reference_points',
+];
+
+/** List revisions of a plan (metadata only). */
+export function listRevisions({ planId, userId, reqId }) {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT revision_no as revisionNo, created_by as createdBy, created_at as createdAt
+    FROM plan_revisions WHERE plan_id = ? ORDER BY revision_no DESC
+  `).all(planId);
+  auditLog(db, { reqId, userId, action: 'list_plan_revisions', resourceType: 'ebrt_plan', resourceId: planId, metadata: { count: rows.length } });
+  return rows;
+}
+
+/** Full snapshot of one revision. */
+export function getRevision({ planId, revisionNo, userId, reqId }) {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT revision_no as revisionNo, snapshot_json as snapshotJson, created_at as createdAt
+    FROM plan_revisions WHERE plan_id = ? AND revision_no = ?
+  `).get(planId, revisionNo);
+  if (!row) throw Object.assign(new Error('Revision not found'), { status: 404 });
+  return { revisionNo: row.revisionNo, createdAt: row.createdAt, snapshot: parseJsonField(row.snapshotJson) };
+}
+
+/** Restore a revision: plan scalars + beams + reference points, as a new
+ *  head revision (history is never rewritten). */
+export function rollbackToRevision({ planId, revisionNo, userId, reqId }) {
+  const db = getDb();
+  const rev = getRevision({ planId, revisionNo, userId, reqId });
+  const snap = rev.snapshot;
+  const plan = snap.plan;
+
+  const cols = REVISION_RESTORABLE.map(k => `${k} = ?`).join(', ');
+  const vals = REVISION_RESTORABLE.map(k => plan[k] ?? null);
+  db.prepare(`UPDATE ebrt_plans SET ${cols} WHERE id = ?`).run(...vals, planId);
+
+  db.prepare('DELETE FROM ebrt_beams WHERE plan_id = ?').run(planId);
+  const insBeam = db.prepare(`
+    INSERT INTO ebrt_beams (plan_id, beam_number, name, beam_type, energy_mv, gantry_angle,
+      gantry_angle_stop, collimator_angle, couch_angle, jaw_x1, jaw_x2, jaw_y1, jaw_y2, weight,
+      wedge_angle, bolus, meterset, leaf_pair_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const b of snap.beams ?? []) {
+    insBeam.run(
+      planId, b.beamNumber, b.name, b.beamType, b.energyMv, b.gantryAngle, b.gantryAngleStop,
+      b.collimatorAngle, b.couchAngle, b.jawX1, b.jawX2, b.jawY1, b.jawY2, b.weight,
+      b.wedgeAngle, b.bolus, b.meterset, b.leafPairCount,
+    );
+  }
+
+  captureRevision({ planId: planId, userId, reqId }); // record the rollback as the new head
+  auditLog(db, {
+    reqId, userId,
+    action: 'rollback_plan_revision',
+    resourceType: 'ebrt_plan', resourceId: planId,
+    metadata: { restoredRevisionNo: revisionNo },
+  });
+  return getPlan({ id: planId, userId, reqId });
 }
