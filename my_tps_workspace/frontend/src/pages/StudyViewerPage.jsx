@@ -18,7 +18,9 @@ import ContouringPanel from '../modules/contouring/ContouringPanel.jsx';
 import { useContouring } from '../modules/contouring/useContouring.js';
 import { imageToHU } from '../modules/contouring/paintCore.js';
 import EvaluationPanel from '../modules/evaluation/EvaluationPanel.jsx';
+import EvaluationPane from '../modules/evaluation/EvaluationPane.jsx';
 import DoseProbeOverlay from '../modules/evaluation/DoseProbeOverlay.jsx';
+import { useDvh } from '../modules/evaluation/useDvh.js';
 import { trilinearSample, findGlobalMax, voxelToPatient } from '../lib/doseSampling.js';
 import RegistrationOverlay from '../modules/registration/RegistrationOverlay.jsx';
 import RegistrationPanel from '../modules/registration/RegistrationPanel.jsx';
@@ -428,6 +430,20 @@ export default function StudyViewerPage() {
     studyId: Number(studyId),
     ctFiles: filesForModality,
     ctGeom,
+  });
+
+  // M5 evaluation: DVH state shared by the sidebar controls and the main pane
+  const paintedSegments = useMemo(
+    () => contouring.segments.map(s => ({ ...s, slices: contouring.serializeSegment(s.id) })),
+    [contouring.segments, contouring.paintVersion],
+  );
+  const dvh = useDvh({
+    roiSequence: structures,
+    contourSequence: contours,
+    paintedSegments,
+    doseGrid,
+    doseMeta: doseData,
+    ctFiles: filesForModality,
   });
 
   // Isocenter slice index (nearest CT slice to the plan isocenter z).
@@ -910,6 +926,18 @@ export default function StudyViewerPage() {
           )}
         </Box>
 
+          {/* M5 evaluation: full-width DVH pane next to the viewport */}
+          {activeModule === 'evaluation' && (
+            <Box sx={{ width: '46%', minWidth: 480, borderLeft: '1px solid rgba(88,196,220,0.12)',
+                       background: 'background.paper' }}>
+              <EvaluationPane
+                dvh={dvh}
+                doseReady={!!(doseGrid && doseData)}
+                prescriptionCgy={prescriptionCgy}
+              />
+            </Box>
+          )}
+
         {mprActive && (
           <Box sx={{ width: '30%', minWidth: 260, display: 'flex', flexDirection: 'column',
                      borderLeft: '1px solid rgba(88,196,220,0.12)' }}>
@@ -1053,13 +1081,8 @@ export default function StudyViewerPage() {
           )}
           {activeModule === 'evaluation' && (
             <EvaluationPanel
-              plan={rtPlan}
-              roiSequence={structures}
-              contourSequence={contours}
-              paintedSegments={contouring.segments.map(s => ({ ...s, slices: contouring.serializeSegment(s.id) }))}
-              doseGrid={doseGrid}
-              doseMeta={doseData}
-              ctFiles={filesForModality}
+              dvh={dvh}
+              doseReady={!!(doseGrid && doseData)}
               doseProbe={doseProbe}
               probeEnabled={doseProbeEnabled}
               onToggleProbe={() => setDoseProbeEnabled(v => !v)}
