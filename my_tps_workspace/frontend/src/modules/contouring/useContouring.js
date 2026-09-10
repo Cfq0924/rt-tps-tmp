@@ -618,7 +618,7 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     cleanupActive, cropActiveOnSlice, cropActiveAllSlices, extractWallFromActive,
     paintOnPlane, fillRectOnPlane, cropOnPlane, floodFillOnPlane,
     addSegment, addSegmentFromDictionary, updateSegment, deleteSegment, save,
-    loadFromServer, getMask,
+    loadFromServer, getMask, serializeSegment,
   };
 }
 

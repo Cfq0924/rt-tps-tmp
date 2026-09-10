@@ -418,6 +418,13 @@ export default function StudyViewerPage() {
     };
   }, [filesForModality, currentImageIndex]);
 
+  // M2 contouring module state (persistence + paint masks + undo/redo)
+  const contouring = useContouring({
+    studyId: Number(studyId),
+    ctFiles: filesForModality,
+    ctGeom,
+  });
+
   // MPR column active: enabled + CT + images module (v1 scope)
   const mprActive = mprEnabled && activeModality === 'CT'
     && (activeModule === 'images' || activeModule === 'contouring');
@@ -432,13 +439,6 @@ export default function StudyViewerPage() {
       ? Math.round(rtPlan.prescription.targetPrescriptionDoseGy * 100)
       : null;
   })();
-
-  // M2 contouring module state (persistence + paint masks + undo/redo)
-  const contouring = useContouring({
-    studyId: Number(studyId),
-    ctFiles: filesForModality,
-    ctGeom,
-  });
 
   // M5 evaluation: DVH state shared by the sidebar controls and the main pane
   const paintedSegments = useMemo(
