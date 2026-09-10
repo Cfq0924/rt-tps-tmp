@@ -44,3 +44,5 @@ WISSEN.md
 
 # One-off backend debug/migration scripts (local only)
 backend/scripts/
+frontend/e2e/shots/
+frontend/e2e/.chrome-profile/

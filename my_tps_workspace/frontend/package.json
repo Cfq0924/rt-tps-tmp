@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "ui:smoke": "node e2e/browser.mjs run smoke.e2e.mjs"
   },
   "dependencies": {
     "@cornerstonejs/core": "^4.22.13",

@@ -80,6 +80,7 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
   const [revisions, setRevisions] = useState([]);
   const [showRevisions, setShowRevisions] = useState(false);
   const [doseBusy, setDoseBusy] = useState(false);
+  const [normBusy, setNormBusy] = useState(false);
   const [checks, setChecks] = useState(null);
   const [cps, setCps] = useState(null); // control points of selected beam
   const [subfields, setSubfields] = useState([]);
@@ -255,9 +256,10 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
   };
 
   const handleNormalize = async () => {
-    if (!selectedPlan) return;
+    if (!selectedPlan || normBusy) return;
     setFormError('');
-    setOpNote('');
+    setOpNote('Rescaling dose grid…');
+    setNormBusy(true);
     try {
       const payload = normMode === 'PERCENT_COVERS'
         ? { cover: numOrNull(coversDose), ofVolume: numOrNull(coversVol) }
@@ -270,6 +272,8 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
       setOpNote(`Normalized (${normMode}) ×${r?.factor?.toFixed?.(4) ?? r?.factor ?? '?'}`);
     } catch (err) {
       setFormError(err.message);
+    } finally {
+      setNormBusy(false);
     }
   };
 
@@ -888,9 +892,10 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
               ) : null}
               <Tooltip title="Rescale the plan dose grid (requires an associated dose file)">
                 <Button size="small" variant="outlined" startIcon={<Straighten fontSize="small" />}
+                        disabled={normBusy}
                         onClick={handleNormalize}
                         sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
-                  Apply
+                  {normBusy ? 'Applying…' : 'Apply'}
                 </Button>
               </Tooltip>
             </Box>
