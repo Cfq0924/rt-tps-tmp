@@ -12,3 +12,6 @@ ralph/
 
 # Knowledge base stays untracked (see my_tps_workspace/.gitignore)
 WISSEN.md
+
+# Large source manuals: extracted text/pages are committed instead (docs/test01-extract/)
+docs/test01.pdf
