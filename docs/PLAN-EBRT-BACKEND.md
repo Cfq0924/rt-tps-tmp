@@ -83,7 +83,7 @@ MLC JSON 体积评估后决定是否换 BLOB+压缩（先 JSON，必要时再迁
 
 ## 3. 工作包明细
 
-### B1 Course/Plan 处方模型 + DPV（3-4 天）
+### B1 Course/Plan 处方模型 + DPV（3-4 天）✅ 已交付
 
 - `courses` CRUD（list/create/patch/delete；删除级联至计划——计划可选迁移）
 - ebrt_plans 补丁：course_id / target_structure_name / dose_per_fraction_gy /
@@ -105,7 +105,7 @@ MLC JSON 体积评估后决定是否换 BLOB+压缩（先 JSON，必要时再迁
   复制几何、gantry += 180（>180 取 −180 规范化）、couch 同步镜像、新编号
 - 校验：叶对数 ∈ {40(MLCi2), 60, 80(Millennium 120), 100...} 按机型表；
   叶位物理边界（x1 ≤ x2、行程 ±200mm、叶片碰撞最小间距）
-- 验收：TEST849 RTPLAN 导入 → 控制点/MLC 与 dcmjs 原始解析逐点一致
+- 验收：TEST849 RTPLAN 导入 → 控制点/MLC 与 dcmjs 原始解析逐点一致 ✅（17 测中含断言）
 
 ### B3 归一化服务（2-3 天）
 
@@ -119,7 +119,7 @@ MLC JSON 体积评估后决定是否换 BLOB+压缩（先 JSON，必要时再迁
 - 验收：PERCENT_OF_TARGET 95 → 目标结构 D50 缩放至 95% 处方；ISOCENTER 模式
   与 M5a 计算端点的等中心归一数值一致
 
-### B4 计算模型与计算体积（2 天）
+### B4 计算模型与计算体积（2 天）✅ 已交付
 
 - calc_models_json：`{ volumeDose: { algorithm, gridSizeMm (0.1–0.5),
   calcVolume: {x1,x2,y1,y2,z1,z2} | 'FULL', gpu: false }, ... }` 按 Eclipse
@@ -127,7 +127,7 @@ MLC JSON 体积评估后决定是否换 BLOB+压缩（先 JSON，必要时再迁
 - M5a 引擎读取 gridSizeMm 与 calcVolume（当前全网格计算升级为按体积裁剪）
 - Info tabs Calculation Models 标签页升级为可编辑表单
 
-### B5 Couch 结构 + DPV 剂量报告（3-4 天）
+### B5 Couch 结构 + DPV 剂量报告（3-4 天）✅ 已交付
 
 - 床结构生成器：`POST /studies/:id/couch-structure`
   `{profile: 'rectangle'|'rails', topOffsetMm, widthMm, huOverride?}` →
@@ -139,7 +139,7 @@ MLC JSON 体积评估后决定是否换 BLOB+压缩（先 JSON，必要时再迁
 - 验收：TEST849 计划在等中心参考点采样值 ≈ 外部参考网格同位置剂量（同网格
   精确一致；与 v1 引擎计算的对比为相对量）
 
-### B6 审批强化：校验清单 + Delta Couch + Revisions（2-3 天）
+### B6 审批强化：校验清单 + Delta Couch + Revisions（2-3 天）✅ 已交付
 
 - `GET /ebrt/plans/:id/approval-checks` →
   `{ errors: [...], warnings: [...] }`：
@@ -189,3 +189,17 @@ MLC JSON 体积评估后决定是否换 BLOB+压缩（先 JSON，必要时再迁
 - MLC 体量：96 CP × 60 叶对 × 2 值 ≈ 11KB JSON/野——可控；必要时 BLOB+zlib
 - Course 层级引起前端计划列表分组——渐进（先后端支持，UI 后续跟進）
 - RTPLAN 导入/导出往返：以 dcmjs 原始解析为基准逐字段回归
+
+
+---
+
+## 附录：手册解析资产（2026-09）
+
+- `docs/test01.pdf`（636 页，143 MB）已用 PyMuPDF 全文提取：
+  - `docs/test01-extract/fulltext.md` — 逐页全文（带 `===== PAGE N =====` 分隔）
+  - `docs/test01-extract/page-index.json` — 页索引
+  - `docs/test01-extract/pages/*.png` — 关键 UI 页 2× 渲染（归一化对话框、
+    Delta Couch Shifts、Plan Details/Target/DPV、GUI 布局总览等 18 页）
+- 状态：B1/B3/B4/B5/B6 已交付；B2 的 parseRTPlan v2（MLC 逐控制点）已交付
+- 关键工程教训（WISSEN §11.8 同源）：dcmjs parse→write 往返会损坏像素数据，
+  剂量文件改写必须走 parseRTDose→datasetToBuffer 再生路径
