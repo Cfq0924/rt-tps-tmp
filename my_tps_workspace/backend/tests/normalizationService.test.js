@@ -11,7 +11,7 @@ const TEST_FILES_DIR = join(tmpdir(), `normalize-files-${process.pid}`);
 process.env.DB_PATH = TEST_DB;
 process.env.UPLOAD_DIR = TEST_FILES_DIR;
 
-const { datasetToBuffer, DicomMessage, DicomMetaDictionary } = dcmjs.data;
+const { datasetToBuffer, DicomMessage } = dcmjs.data;
 const STUDY_ID = 1;
 let doseFileId;
 let svc;
@@ -73,9 +73,12 @@ async function setup() {
   `).run(STUDY_ID, dosePath, 'dose.dcm');
   doseFileId = info.lastInsertRowid;
   db2.prepare(`
-    INSERT INTO ebrt_plans (study_id, name, prescription_dose_gy, number_of_fractions, isocenter_x, isocenter_y, isocenter_z)
-    VALUES (?, 'Norm Plan', 20, 10, 2, 2, -898)
-  `).run(STUDY_ID);
+    INSERT INTO ebrt_plans (study_id, name, prescription_dose_gy, number_of_fractions, isocenter_x, isocenter_y, isocenter_z, reference_points)
+    VALUES (?, 'Norm Plan', 20, 10, 2, 2, -898, ?)
+  `).run(STUDY_ID, JSON.stringify([
+    { name: 'DPV Prostate', isDpv: true, type: 'TARGET', x: 2, y: 2, z: -898, totalDoseLimitGy: 76 },
+    { name: 'Point A', type: 'POINT', x: 2, y: 2, z: -898 },
+  ]));
   db2.close();
 }
 
@@ -100,32 +103,58 @@ describe('normalizationService', () => {
   }
 
   it('VALUE mode rescales the stored grid by the exact factor', async () => {
-    const before = readScaling();
     const result = await svc.normalizePlanDose({ planId: 1, mode: 'VALUE', value: 150, userId: 1, reqId: 't' });
     assert.ok(Math.abs(result.factor - 1.5) < 1e-9);
-    const after = readScaling();
-    assert.ok(Math.abs(after - before * 1.5) / after < 1e-6);
+    // original grid max 1230 cGy × 1.5 = 1845 — pixels scaled, scaling unchanged
+    const { getDoseGrid } = await import('../src/services/rtDoseService.js');
+    const grid = (await getDoseGrid(doseFileId, {}, 't')).grid;
+    assert.ok(Math.abs(Math.max(...grid) - 1845) < 1, `max ${Math.max(...grid)}`);
+    assert.strictEqual(readScaling(), 0.01); // DS unchanged in the regenerate path
   });
 
   it('ISOCENTER mode: iso voxel lands on value% of Rx', async () => {
-    const { getDoseGrid } = await import('../src/services/rtDoseService.js');
-    // plan isocentre (2,2,-898) maps to dose voxel (i=1, j=1, k=0) at 2mm spacing
+    // plan isocentre (2,2,-898) maps to dose voxel (i=1, j=1, k=0) at 2mm spacing;
+    // raw there = 110 → 100% of Rx (2000 cGy)
     const isoIdx = 0 * 12 + 1 * 4 + 1;
-    const before = (await getDoseGrid(doseFileId, {}, 't')).grid[isoIdx];
     await svc.normalizePlanDose({ planId: 1, mode: 'ISOCENTER', value: 100, userId: 1, reqId: 't' });
-    const grid2 = await getDoseGrid(doseFileId, {}, 't');
-    const isoAfter = grid2.grid[isoIdx];
-    // 20 Gy Rx → iso should be ~2000 cGy after ISOCENTER 100
-    assert.ok(Math.abs(isoAfter - 2000) < 1, `iso ${isoAfter}`);
+    const { getDoseGrid } = await import('../src/services/rtDoseService.js');
+    const grid = (await getDoseGrid(doseFileId, {}, 't')).grid;
+    assert.ok(Math.abs(grid[isoIdx] - 2000) < 1, `iso ${grid[isoIdx]}`);
+  });
+
+  it('BODY_MAX scales so grid max equals value% of Rx', async () => {
+    await svc.normalizePlanDose({ planId: 1, mode: 'BODY_MAX', value: 100, userId: 1, reqId: 't' });
+    const { getDoseGrid } = await import('../src/services/rtDoseService.js');
+    const grid = (await getDoseGrid(doseFileId, {}, 't')).grid;
+    // original max 1230 → 100% of Rx = 2000 cGy
+    assert.ok(Math.abs(Math.max(...grid) - 2000) < 1, `max ${Math.max(...grid)}`);
+  });
+
+  it('PRIMARY_REF_POINT scales so the DPV point hits 100% of Rx', async () => {
+    const db = (await import('../src/db/init.js')).getDb();
+    db.prepare("UPDATE ebrt_plans SET primary_point_name = 'DPV Prostate' WHERE id = 1").run();
+    const result = await svc.normalizePlanDose({ planId: 1, mode: 'PRIMARY_REF_POINT', userId: 1, reqId: 't' });
+    assert.ok(result.factor > 0);
+    // DPV Prostate at (2,2,-898) → voxel (i=1, j=1, k=0): raw 110 → normalised to 2000 cGy
+    const { getDoseGrid } = await import('../src/services/rtDoseService.js');
+    const grid = (await getDoseGrid(doseFileId, {}, 't')).grid;
+    assert.ok(Math.abs(grid[0 * 12 + 1 * 4 + 1] - 2000) < 1, `DPV ${grid[0 * 12 + 1 * 4 + 1]}`);
+  });
+
+  it('NONE records the choice without rescaling', async () => {
+    const before = readScaling();
+    const result = await svc.normalizePlanDose({ planId: 1, mode: 'NONE', userId: 1, reqId: 't' });
+    assert.strictEqual(result.factor, 1);
+    assert.strictEqual(readScaling(), before);
   });
 
   it('rejects unknown modes and missing values', async () => {
     await assert.rejects(
-      svc.normalizePlanDose({ planId: 1, mode: 'MAGIC', userId: 1, reqId: 't' }),
+      async () => svc.normalizePlanDose({ planId: 1, mode: 'MAGIC', userId: 1, reqId: 't' }),
       e => e.status === 400,
     );
     await assert.rejects(
-      svc.normalizePlanDose({ planId: 1, mode: 'VALUE', value: 0, userId: 1, reqId: 't' }),
+      async () => svc.normalizePlanDose({ planId: 1, mode: 'VALUE', value: 0, userId: 1, reqId: 't' }),
       e => e.status === 400,
     );
   });

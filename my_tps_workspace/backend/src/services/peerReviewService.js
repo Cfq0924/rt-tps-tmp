@@ -174,12 +174,19 @@ export function closeSession({ sessionId, decision, deltaCouch, userId, userEmai
     throw Object.assign(new Error('decision must be APPROVED or UNAPPROVED'), { status: 400 });
   }
   if (deltaCouch != null) {
-    if (typeof deltaCouch !== 'object' || Array.isArray(deltaCouch)) {
-      throw Object.assign(new Error('deltaCouch must be an object'), { status: 400 });
+    // Eclipse Delta Couch Shifts shape: { shifts: [{ fieldId, vrt, lng, lat }] }
+    // (cm values, per field). Accept and validate that shape.
+    if (typeof deltaCouch !== 'object' || Array.isArray(deltaCouch) || !Array.isArray(deltaCouch.shifts)) {
+      throw Object.assign(new Error('deltaCouch must be { shifts: [{ fieldId, vrt, lng, lat }] }'), { status: 400 });
     }
-    for (const k of ['x', 'y', 'z', 'rotation']) {
-      if (deltaCouch[k] !== undefined && !Number.isFinite(Number(deltaCouch[k]))) {
-        throw Object.assign(new Error(`deltaCouch.${k} must be numeric`), { status: 400 });
+    for (const sh of deltaCouch.shifts) {
+      if (!sh || !Number.isInteger(Number(sh.fieldId))) {
+        throw Object.assign(new Error('each shift needs a numeric fieldId'), { status: 400 });
+      }
+      for (const k of ['vrt', 'lng', 'lat']) {
+        if (sh[k] !== undefined && !Number.isFinite(Number(sh[k]))) {
+          throw Object.assign(new Error(`deltaCouch.${k} must be numeric`), { status: 400 });
+        }
       }
     }
   }

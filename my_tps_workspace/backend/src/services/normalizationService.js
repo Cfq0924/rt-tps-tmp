@@ -2,11 +2,12 @@ import { readFileSync, writeFileSync } from 'fs';
 import dcmjs from 'dcmjs';
 import { getDb } from '../db/init.js';
 import { auditLog } from '../logging/index.js';
-import { getDoseGrid, invalidateDoseGrid } from './rtDoseService.js';
+import { getDoseGrid, invalidateDoseGrid, parseRTDose } from './rtDoseService.js';
 import { getPlan } from './ebrtPlanService.js';
+import { loadStudyMeta } from './exportService.js';
 import { parseRTStruct } from './rtStructService.js';
 
-const { data: { DicomMessage } } = dcmjs;
+const { data: { datasetToBuffer } } = dcmjs;
 
 /**
  * Plan normalization (Eclipse "Plan Normalization" dialog): rescale the
@@ -21,7 +22,38 @@ const { data: { DicomMessage } } = dcmjs;
  *   VALUE : all doses scaled by `value` / 100
  */
 
-const MODES = new Set(['TARGET_MAX', 'TARGET_MEAN', 'TARGET_MIN', 'PERCENT_OF_TARGET', 'ISOCENTER', 'VALUE']);
+const MODES = new Set([
+  'TARGET_MAX', 'TARGET_MEAN', 'TARGET_MIN',
+  'PERCENT_COVERS',            // X% covers Y% of target structure
+  'BODY_MAX',
+  'PRIMARY_REF_POINT',         // 100% at primary reference point (DPV)
+  'REFERENCE_POINT',           // 100% at named reference point
+  'ISOCENTER',                 // 100% at field isocentre
+  'VALUE',                     // plan normalization value (× value/100)
+  'NONE',                      // no plan normalization (record only)
+]);
+
+/** Locate the primary (DPV) or named reference point of a plan. */
+function findRefPoint(plan, name = null) {
+  const pts = plan.referencePoints ?? [];
+  if (name) return pts.find(p => p.name === name) ?? null;
+  return pts.find(p => p.isDpv || p.type === 'TARGET') ?? pts[0] ?? null;
+}
+
+/** Dose (cGy) at a reference point from the grid, or null when outside. */
+function pointDose(grid, doseMeta, pt) {
+  if (!pt || pt.x == null || pt.y == null || pt.z == null) return null;
+  const { rows, columns, numberOfFrames, imagePosition, pixelSpacing, gridFrameOffsetVector } = doseMeta;
+  const i = Math.round((pt.x - imagePosition.x) / pixelSpacing.j);
+  const j = Math.round((pt.y - imagePosition.y) / pixelSpacing.i);
+  let k = 0, best = Infinity;
+  for (let f = 0; f < gridFrameOffsetVector.length; f++) {
+    const d = Math.abs(gridFrameOffsetVector[f] - (pt.z - imagePosition.z));
+    if (d < best) { best = d; k = f; }
+  }
+  if (i < 0 || i >= columns || j < 0 || j >= rows || k >= numberOfFrames) return null;
+  return grid[k * rows * columns + j * columns + i];
+}
 
 function latestRtDoseFile(db, studyId) {
   return db.prepare(`
@@ -140,6 +172,23 @@ export async function computeNormalizationFactor({ studyId, plan, mode, value, d
     if (!value || value <= 0) throw Object.assign(new Error('VALUE mode needs a positive value'), { status: 400 });
     return { factor: value / 100, description: `scale × ${value}%` };
   }
+  if (mode === 'BODY_MAX') {
+    const max = doseGrid.reduce((m, v) => (v > m ? v : m), 0);
+    if (max <= 0) throw Object.assign(new Error('dose grid is empty'), { status: 400 });
+    return { factor: (rx * ((value ?? 100) / 100)) / max, description: `body max → ${value ?? 100}% of Rx` };
+  }
+  if (mode === 'PRIMARY_REF_POINT' || mode === 'REFERENCE_POINT') {
+    const pt = mode === 'PRIMARY_REF_POINT'
+      ? findRefPoint(plan)
+      : findRefPoint(plan, String(value ?? ''));
+    if (!pt) throw Object.assign(new Error('reference point not found'), { status: 400 });
+    const dose = pointDose(doseGrid, doseMeta, pt);
+    if (dose == null || dose <= 0) throw Object.assign(new Error('reference point is outside the dose grid'), { status: 400 });
+    return { factor: (rx * ((value ?? 100) / 100)) / dose, description: `${pt.name} → ${value ?? 100}% of Rx` };
+  }
+  if (mode === 'NONE') {
+    return { factor: 1, description: 'no plan normalization' };
+  }
   if (mode === 'ISOCENTER') {
     const v = value ?? 100;
     const dose = sampleDose(doseGrid, doseMeta, [plan.isocenterX ?? 0, plan.isocenterY ?? 0, plan.isocenterZ ?? 0]);
@@ -179,6 +228,7 @@ export async function normalizePlanDose({ planId, mode, value, userId, reqId }) 
   if (!doseFile) {
     throw Object.assign(new Error('No dose grid available — calculate or import a dose first'), { status: 400 });
   }
+  invalidateDoseGrid(doseFile.id);
   const grid = await getDoseGrid(doseFile.id, {}, reqId);
   const { factor, description } = await computeNormalizationFactor({
     studyId: plan.studyId, plan, mode, value,
@@ -187,18 +237,52 @@ export async function normalizePlanDose({ planId, mode, value, userId, reqId }) 
     prescriptionCgy: (plan.prescriptionDoseGy ?? 0) * 100,
   });
 
-  // read the raw file, update DoseGridScaling (lossless round trip), rewrite
-  const buf = readFileSync(doseFile.file_path);
-  const dicomDict = DicomMessage.readFile(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-  const el = dicomDict.dict['3004000E'];
-  if (!el) {
-    throw Object.assign(new Error('dose file has no DoseGridScaling element'), { status: 400 });
+  // regenerate the RTDOSE file: same geometry, raw stored pixels scaled by
+  // the factor, DoseGridScaling unchanged — a deterministic, proven path
+  // (the raw-dict edit round trip corrupted pixel data empirically)
+  const studyMeta = loadStudyMeta(db, plan.studyId);
+  const parsed = await parseRTDose(doseFile.file_path);
+  const pixels = new Int32Array(parsed.pixelData.length);
+  for (let i = 0; i < parsed.pixelData.length; i++) {
+    pixels[i] = Math.round(Number(parsed.pixelData[i]) * factor);
   }
-  const oldScaling = Number(Array.isArray(el._rawValue) ? el._rawValue[0] : (Array.isArray(el.Value) ? el.Value[0] : 1)) || 1;
-  const newScaling = Number((oldScaling * factor).toPrecision(8));
-  if (Array.isArray(el._rawValue)) el._rawValue = [String(newScaling)];
-  el.Value = [newScaling];
-  const out = Buffer.from(dicomDict.write());
+  const now = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const dataset = {
+    _meta: {},
+    SpecificCharacterSet: 'ISO_IR 192',
+    SOPClassUID: '1.2.840.10008.5.1.4.1.481.2',
+    SOPInstanceUID: doseFile.sop_instance_uid,
+    StudyInstanceUID: studyMeta.study_instance_uid,
+    SeriesInstanceUID: doseFile.series_instance_uid,
+    Modality: 'RTDOSE',
+    PatientName: studyMeta.patient_name ?? '',
+    PatientID: studyMeta.patient_external_id ?? '',
+    PatientBirthDate: studyMeta.patient_birth_date ?? undefined,
+    PatientSex: undefined,
+    SamplesPerPixel: 1,
+    PhotometricInterpretation: 'MONOCHROME2',
+    Rows: parsed.rows,
+    Columns: parsed.columns,
+    NumberOfFrames: parsed.numberOfFrames,
+    BitsAllocated: 32,
+    BitsStored: 32,
+    HighBit: 31,
+    PixelRepresentation: 1,
+    ImagePositionPatient: parsed.imagePosition ? [parsed.imagePosition.x, parsed.imagePosition.y, parsed.imagePosition.z] : [0, 0, 0],
+    ImageOrientationPatient: [1, 0, 0, 0, 1, 0],
+    PixelSpacing: parsed.pixelSpacing ? [parsed.pixelSpacing.i, parsed.pixelSpacing.j] : [1, 1],
+    GridFrameOffsetVector: parsed.gridFrameOffsetVector,
+    FrameIncrementPointer: '3004000C',
+    DoseUnits: parsed.doseUnits || 'GY',
+    DoseType: parsed.doseType || 'PLAN',
+    DoseSummationType: parsed.doseSummationType || 'PLAN',
+    DoseGridScaling: parsed.doseGridScaling,
+    PixelData: new Uint8Array(pixels.buffer),
+    InstanceCreationDate: new Date().toISOString().slice(0, 10).replaceAll('-', ''),
+    InstanceCreationTime: `${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}`,
+  };
+  const out = Buffer.from(datasetToBuffer(dataset));
   writeFileSync(doseFile.file_path, out);
   invalidateDoseGrid(doseFile.id);
 
@@ -212,5 +296,6 @@ export async function normalizePlanDose({ planId, mode, value, userId, reqId }) 
     metadata: { mode, value: value ?? null, factor, doseFileId: doseFile.id },
   });
 
-  return { factor, mode, description, newScaling, doseFileId: doseFile.id };
+  return { factor, mode, description, doseFileId: doseFile.id };
 }
+
