@@ -22,7 +22,7 @@ import EvaluationPane from '../modules/evaluation/EvaluationPane.jsx';
 import DoseProbeOverlay from '../modules/evaluation/DoseProbeOverlay.jsx';
 import { useDvh } from '../modules/evaluation/useDvh.js';
 import DVHChart from '../modules/evaluation/DVHChart.jsx';
-import { trilinearSample, findGlobalMax, voxelToPatient } from '../lib/doseSampling.js';
+import { toSamplingGeom, trilinearSample, findGlobalMax, voxelToPatient } from '../lib/doseSampling.js';
 import RegistrationOverlay from '../modules/registration/RegistrationOverlay.jsx';
 import RegistrationPanel from '../modules/registration/RegistrationPanel.jsx';
 import PlanSums from '../modules/doseSum/PlanSums.jsx';
@@ -479,18 +479,7 @@ export default function StudyViewerPage() {
   }
 
   // --- M5 point dose / global max (evaluation module) ---
-  // Sampling geometry built from doseMeta with the field names doseSampling expects.
-  const doseSamplingGeom = useMemo(() => {
-    if (!doseData) return null;
-    return {
-      imagePosition: doseData.imagePosition,
-      imageOrientation: doseData.imageOrientation,
-      pixelSpacing: doseData.pixelSpacing,
-      gridFrameOffsetVector: doseData.gridFrameOffsetVector,
-      cols: doseData.columns,
-      rows: doseData.rows,
-    };
-  }, [doseData]);
+  const doseSamplingGeom = useMemo(() => toSamplingGeom(doseData), [doseData]);
 
   const sampleDoseAt = useCallback((point) => {
     if (!doseGrid || !doseSamplingGeom) return { point, doseCgy: null, pctRx: null };
@@ -555,13 +544,7 @@ export default function StudyViewerPage() {
   const mprDoseProps = useMemo(() => (
     (doseVisible && doseGrid && doseData) ? {
       grid: doseGrid,
-      geom: {
-        imagePosition: doseData.imagePosition,
-        imageOrientation: doseData.imageOrientation,
-        pixelSpacing: doseData.pixelSpacing,
-        gridFrameOffsetVector: doseData.gridFrameOffsetVector,
-        columns: doseData.columns, rows: doseData.rows,
-      },
+      geom: toSamplingGeom(doseData),
       doseAtFull: (doseData.maxDose ?? 100) * (doseThreshold / 100),
       opacity: doseOpacity,
     } : null
@@ -1090,18 +1073,7 @@ export default function StudyViewerPage() {
                 crosshair={crosshair}
                 sliceIdx={currentImageIndex}
                 onCrosshairChange={handleMprCrosshair}
-                dose={doseVisible && doseGrid && doseData ? {
-                  grid: doseGrid,
-                  geom: {
-                    imagePosition: doseData.imagePosition,
-                    imageOrientation: doseData.imageOrientation,
-                    pixelSpacing: doseData.pixelSpacing,
-                    gridFrameOffsetVector: doseData.gridFrameOffsetVector,
-                    columns: doseData.columns, rows: doseData.rows,
-                  },
-                  doseAtFull: (doseData.maxDose ?? 100) * (doseThreshold / 100),
-                  opacity: doseOpacity,
-                } : null}
+                dose={mprDoseProps}
                 masterViewport={viewportInstance}
                 iso={mprIso}
               />
@@ -1137,18 +1109,7 @@ export default function StudyViewerPage() {
                 crosshair={crosshair}
                 sliceIdx={currentImageIndex}
                 onCrosshairChange={handleMprCrosshair}
-                dose={doseVisible && doseGrid && doseData ? {
-                  grid: doseGrid,
-                  geom: {
-                    imagePosition: doseData.imagePosition,
-                    imageOrientation: doseData.imageOrientation,
-                    pixelSpacing: doseData.pixelSpacing,
-                    gridFrameOffsetVector: doseData.gridFrameOffsetVector,
-                    columns: doseData.columns, rows: doseData.rows,
-                  },
-                  doseAtFull: (doseData.maxDose ?? 100) * (doseThreshold / 100),
-                  opacity: doseOpacity,
-                } : null}
+                dose={mprDoseProps}
                 masterViewport={viewportInstance}
                 iso={mprIso}
               />

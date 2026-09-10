@@ -3,6 +3,7 @@ import { auditLog } from '../logging/index.js';
 import { getDoseGrid } from './rtDoseService.js';
 import { getPlan } from './ebrtPlanService.js';
 import { parseRTStruct } from './rtStructService.js';
+import { latestFileByModality, sampleDoseAtPoint } from './dicomQuery.js';
 
 /**
  * B5: couch structures + reference point dose reporting.
@@ -86,10 +87,7 @@ export async function referencePointDoses({ planId, doseFileId = null, userId, r
   const fractions = plan.numberOfFractions || 1;
 
   const doseFileIdResolved = doseFileId
-    ?? db.prepare(`
-      SELECT id FROM dicom_files
-      WHERE study_id = ? AND modality = 'RTDOSE' ORDER BY id DESC LIMIT 1
-    `).get(plan.studyId)?.id;
+    ?? latestFileByModality(db, plan.studyId, 'RTDOSE')?.id;
   if (!doseFileIdResolved) {
     return referencePoints.map(pt => ({
       name: pt.name, x: pt.x ?? null, y: pt.y ?? null, z: pt.z ?? null,
@@ -105,18 +103,7 @@ export async function referencePointDoses({ planId, doseFileId = null, userId, r
     rows: grid.rows,
     numberOfFrames: grid.numberOfFrames,
   };
-  const sample = (pt) => {
-    if (pt.x == null || pt.y == null || pt.z == null) return null;
-    const i = Math.round((pt.x - grid.imagePosition.x) / grid.pixelSpacing.j);
-    const j = Math.round((pt.y - grid.imagePosition.y) / grid.pixelSpacing.i);
-    let k = 0, best = Infinity;
-    for (let f = 0; f < grid.gridFrameOffsetVector.length; f++) {
-      const d = Math.abs(grid.gridFrameOffsetVector[f] - (pt.z - grid.imagePosition.z));
-      if (d < best) { best = d; k = f; }
-    }
-    if (i < 0 || j < 0 || i >= grid.columns || j >= grid.rows || k >= grid.numberOfFrames) return null;
-    return grid.grid[k * grid.rows * grid.columns + j * grid.columns + i];
-  };
+  const sample = (pt) => sampleDoseAtPoint(grid.grid, geom, pt);
 
   return referencePoints.map(pt => {
     const totalDoseCgy = sample({ x: pt.x, y: pt.y, z: pt.z });

@@ -10,6 +10,23 @@
  */
 
 /**
+ * Map RTDOSE metadata onto the sampling geometry shape used across the app
+ * (StudyViewerPage, EbrtInfoTabs, MPR overlays). Accepts the doseMeta object
+ * returned by useRTDose / getDoseGrid.
+ */
+export function toSamplingGeom(doseMeta) {
+  if (!doseMeta) return null;
+  return {
+    imagePosition: doseMeta.imagePosition,
+    imageOrientation: doseMeta.imageOrientation,
+    pixelSpacing: doseMeta.pixelSpacing,
+    gridFrameOffsetVector: doseMeta.gridFrameOffsetVector,
+    columns: doseMeta.columns,
+    rows: doseMeta.rows,
+  };
+}
+
+/**
  * Continuous voxel coordinates for a patient point.
  * @returns {{i:number, j:number, k:number}} fractional voxel indices
  */

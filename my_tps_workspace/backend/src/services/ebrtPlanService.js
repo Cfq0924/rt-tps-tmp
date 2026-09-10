@@ -3,6 +3,7 @@ import { auditLog } from '../logging/index.js';
 import { parseRTPlan } from './rtPlanService.js';
 import { getDicomFile } from './dicomService.js';
 import { parseRTStruct } from './rtStructService.js';
+import { latestFileByModality } from './dicomQuery.js';
 
 /**
  * External-beam plan persistence (EBRT module).
@@ -34,11 +35,7 @@ export async function computeTargetIsocenter(studyId, structureName) {
   if (!structureName) return null;
   try {
     const db = getDb();
-    const rt = db.prepare(`
-      SELECT file_path FROM dicom_files
-      WHERE study_id = ? AND modality = 'RTSTRUCT'
-      ORDER BY id DESC LIMIT 1
-    `).get(studyId);
+    const rt = latestFileByModality(db, studyId, 'RTSTRUCT');
     if (!rt) return null;
     const { roiSequence, contourSequence } = await parseRTStruct(rt.file_path);
     const roi = roiSequence.find(r => r.roiName === structureName);

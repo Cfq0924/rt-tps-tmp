@@ -17,6 +17,22 @@ export function useEbrtPlans({ studyId, enabled }) {
   const loadedRef = useRef(false);
   const selectPlanRef = useRef(null);
 
+  // ---------- EBRT backend wiring (PLAN-EBRT-BACKEND B2–B6) ----------
+
+  const postJson = useCallback(async (url, body, method = 'POST', errorMsg = null) => {
+    const res = await fetch(url, {
+      method,
+      credentials: 'include',
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || errorMsg || `${method} ${url} failed`);
+    }
+    return res.json();
+  }, []);
+
   // List rows carry beamCount only; the selected plan is hydrated with its
   // full beams array via selectPlan()
   const selectedPlan = plans.find(p => p.id === selectedPlanId) ?? null;
@@ -25,19 +41,15 @@ export function useEbrtPlans({ studyId, enabled }) {
     setSelectedPlanId(planId);
     const current = plans.find(p => p.id === planId);
     if (current?.beams) return; // already hydrated
-    const res = await fetch(`/api/ebrt/plans/${planId}`, { credentials: 'include' });
-    if (!res.ok) throw new Error('Failed to load plan');
-    const { plan } = await res.json();
+    const { plan } = await postJson(`/api/ebrt/plans/${planId}`, undefined, 'GET', 'Failed to load plan');
     setPlans(prev => prev.map(p => (p.id === plan.id ? plan : p)));
-  }, [plans]);
+  }, [plans, postJson]);
 
   const refreshList = useCallback(async () => {
-    const res = await fetch(`/api/ebrt/study/${studyId}/plans`, { credentials: 'include' });
-    if (!res.ok) throw new Error('Failed to list EBRT plans');
-    const { plans: rows } = await res.json();
+    const { plans: rows } = await postJson(`/api/ebrt/study/${studyId}/plans`, undefined, 'GET', 'Failed to list EBRT plans');
     setPlans(rows);
     return rows;
-  }, [studyId]);
+  }, [studyId, postJson]);
 
   /** Load once when the module opens; auto-select the first plan. */
   useEffect(() => {
@@ -53,181 +65,81 @@ export function useEbrtPlans({ studyId, enabled }) {
   }, [enabled, refreshList]);
 
   const createPlan = useCallback(async (payload) => {
-    const res = await fetch(`/api/ebrt/study/${studyId}/plans`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || 'Failed to create plan');
-    }
-    const { plan } = await res.json();
+    const { plan } = await postJson(`/api/ebrt/study/${studyId}/plans`, payload, 'POST', 'Failed to create plan');
     await refreshList();
     setSelectedPlanId(plan.id);
     return plan;
-  }, [studyId, refreshList]);
+  }, [studyId, refreshList, postJson]);
 
   const importFromRTPlan = useCallback(async (fileId) => {
-    const res = await fetch(`/api/ebrt/study/${studyId}/plans/from-rtplan/${fileId}`, {
-      method: 'POST',
-      credentials: 'include',
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || 'Failed to import RTPLAN');
-    }
-    const { plan } = await res.json();
+    const { plan } = await postJson(`/api/ebrt/study/${studyId}/plans/from-rtplan/${fileId}`, undefined, 'POST', 'Failed to import RTPLAN');
     await refreshList();
     setSelectedPlanId(plan.id);
     return plan;
-  }, [studyId, refreshList]);
+  }, [studyId, refreshList, postJson]);
 
   const updatePlan = useCallback(async (planId, patch) => {
-    const res = await fetch(`/api/ebrt/plans/${planId}`, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || 'Failed to update plan');
-    }
-    const { plan } = await res.json();
+    const { plan } = await postJson(`/api/ebrt/plans/${planId}`, patch, 'PATCH', 'Failed to update plan');
     setPlans(prev => prev.map(p => (p.id === plan.id ? plan : p)));
     return plan;
-  }, []);
+  }, [postJson]);
 
   const deletePlan = useCallback(async (planId) => {
-    const res = await fetch(`/api/ebrt/plans/${planId}`, { method: 'DELETE', credentials: 'include' });
-    if (!res.ok) throw new Error('Failed to delete plan');
+    await postJson(`/api/ebrt/plans/${planId}`, undefined, 'DELETE', 'Failed to delete plan');
     await refreshList();
     setSelectedPlanId(prev => (prev === planId ? null : prev));
-  }, [refreshList]);
+  }, [refreshList, postJson]);
 
   const addBeam = useCallback(async (planId, payload) => {
-    const res = await fetch(`/api/ebrt/plans/${planId}/beams`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || 'Failed to add beam');
-    }
-    const { plan } = await res.json();
+    const { plan } = await postJson(`/api/ebrt/plans/${planId}/beams`, payload, 'POST', 'Failed to add beam');
     setPlans(prev => prev.map(p => (p.id === plan.id ? plan : p)));
     return plan;
-  }, []);
+  }, [postJson]);
 
   const updateBeam = useCallback(async (beamId, patch) => {
-    const res = await fetch(`/api/ebrt/beams/${beamId}`, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || 'Failed to update beam');
-    }
-    const { plan } = await res.json();
+    const { plan } = await postJson(`/api/ebrt/beams/${beamId}`, patch, 'PATCH', 'Failed to update beam');
     setPlans(prev => prev.map(p => (p.id === plan.id ? plan : p)));
     return plan;
-  }, []);
+  }, [postJson]);
 
   selectPlanRef.current = selectPlan;
 
   const deleteBeam = useCallback(async (beamId) => {
-    const res = await fetch(`/api/ebrt/beams/${beamId}`, { method: 'DELETE', credentials: 'include' });
-    if (!res.ok) throw new Error('Failed to delete beam');
-    const { plan } = await res.json();
+    const { plan } = await postJson(`/api/ebrt/beams/${beamId}`, undefined, 'DELETE', 'Failed to delete beam');
     setPlans(prev => prev.map(p => (p.id === plan.id ? plan : p)));
-  }, []);
+  }, [postJson]);
 
   const refreshCourses = useCallback(async () => {
-    const res = await fetch(`/api/courses/study/${studyId}`, { credentials: 'include' });
-    if (!res.ok) throw new Error('Failed to load courses');
-    const { courses: rows } = await res.json();
+    const { courses: rows } = await postJson(`/api/courses/study/${studyId}`, undefined, 'GET', 'Failed to load courses');
     setCourses(rows);
     return rows;
-  }, [studyId]);
+  }, [studyId, postJson]);
 
   const createCourse = useCallback(async (name, intent) => {
-    const res = await fetch(`/api/courses/study/${studyId}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, intent }),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || 'Failed to create course');
-    }
-    const { course } = await res.json();
+    const { course } = await postJson(`/api/courses/study/${studyId}`, { name, intent }, 'POST', 'Failed to create course');
     await refreshCourses();
     return course;
-  }, [studyId, refreshCourses]);
+  }, [studyId, refreshCourses, postJson]);
 
   const refreshTemplates = useCallback(async () => {
-    const res = await fetch('/api/ebrt/templates', { credentials: 'include' });
-    if (!res.ok) throw new Error('Failed to list templates');
-    const { templates: rows } = await res.json();
+    const { templates: rows } = await postJson('/api/ebrt/templates', undefined, 'GET', 'Failed to list templates');
     setTemplates(rows);
     return rows;
-  }, []);
+  }, [postJson]);
 
   const saveAsTemplate = useCallback(async (planId, name) => {
-    const res = await fetch(`/api/ebrt/plans/${planId}/save-as-template`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(name ? { name } : {}),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || 'Failed to save template');
-    }
-    const { template } = await res.json();
+    const { template } = await postJson(`/api/ebrt/plans/${planId}/save-as-template`, name ? { name } : {}, 'POST', 'Failed to save template');
     await refreshTemplates();
     return template;
-  }, [refreshTemplates]);
+  }, [refreshTemplates, postJson]);
 
   const instantiateTemplate = useCallback(async (templateId, name) => {
-    const res = await fetch(`/api/ebrt/templates/${templateId}/instantiate`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studyId, name }),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || 'Failed to create plan from template');
-    }
-    const { plan } = await res.json();
+    const { plan } = await postJson(`/api/ebrt/templates/${templateId}/instantiate`, { studyId, name }, 'POST', 'Failed to create plan from template');
     await refreshList();
     setSelectedPlanId(plan.id);
     return plan;
-  }, [studyId, refreshList]);
+  }, [studyId, refreshList, postJson]);
 
-  // ---------- EBRT backend wiring (PLAN-EBRT-BACKEND B2–B6) ----------
-
-  const postJson = useCallback(async (url, body, method = 'POST') => {
-    const res = await fetch(url, {
-      method,
-      credentials: 'include',
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || `${method} ${url} failed`);
-    }
-    return res.json();
-  }, []);
 
   /** Eclipse Plan Normalization — rescale the plan's dose grid. */
   const normalizePlan = useCallback(async (planId, mode, value) => {
@@ -239,13 +151,9 @@ export function useEbrtPlans({ studyId, enabled }) {
   /** Create the 180° opposing field from a source beam number. */
   const addOpposingField = useCallback(async (planId, sourceBeamNumber, name) => {
     const data = await postJson(`/api/ebrt/plans/${planId}/opposing-field`, { sourceBeamNumber, name });
-    const res = await fetch(`/api/ebrt/plans/${planId}`, { credentials: 'include' });
-    if (res.ok) {
-      const { plan } = await res.json();
-      setPlans(prev => prev.map(p => (p.id === plan.id ? plan : p)));
-    }
+    await selectPlan(planId); // rehydrate the plan with the new beam
     return data.beam ?? data;
-  }, [postJson]);
+  }, [postJson, selectPlan]);
 
   const listSubfields = useCallback(async (beamId) => {
     const data = await postJson(`/api/ebrt/beams/${beamId}/subfields`, undefined, 'GET');

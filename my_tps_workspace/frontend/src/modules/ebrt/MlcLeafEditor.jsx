@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Box, Typography, Slider } from '@mui/material';
+import { Box, Typography } from '@mui/material';
 
 /**
  * MlcLeafEditor — BEV canvas of MLC leaf pairs (X jaws horizontal).

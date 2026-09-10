@@ -1,8 +1,8 @@
 import { Box, Typography, TextField, MenuItem, Button, Table, TableBody, TableCell,
-  TableHead, TableRow, IconButton, Switch, Chip, Divider, Tooltip, Alert, Slider } from '@mui/material';
+  TableHead, TableRow, IconButton, Switch, Chip, Tooltip, Alert, Slider } from '@mui/material';
 import {
   Add, Delete, CloudDownload, Settings, BookmarkAdded, Bookmark, GppGood, RateReview,
-  CallSplit, ContentCopy, Hotel, History, FactCheck, Straighten, Calculate, PinDrop,
+  CallSplit, ContentCopy, Hotel, History, FactCheck, Straighten, Calculate,
 } from '@mui/icons-material';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { MACHINES, DOSE_ALGORITHMS, OPTIMIZATION_ALGORITHMS, NORMALIZATIONS, getMachine } from '../../lib/machines.js';
@@ -80,17 +80,24 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
   const [revisions, setRevisions] = useState([]);
   const [showRevisions, setShowRevisions] = useState(false);
   const [doseBusy, setDoseBusy] = useState(false);
-  const [pointDoses, setPointDoses] = useState(null);
-  const [showPointDoses, setShowPointDoses] = useState(false);
   const [checks, setChecks] = useState(null);
   const [cps, setCps] = useState(null); // control points of selected beam
   const [subfields, setSubfields] = useState([]);
   const [cpIndex, setCpIndex] = useState(0);
   const [draftLeaves, setDraftLeaves] = useState(null);
 
-  const selectedBeam = (selectedPlan?.beams ?? []).find(b => b.id === selectedBeamId)
-    ?? (selectedPlan?.beams ?? [])[0]
-    ?? null;
+  // no implicit selection: beam ops (opposing / MLC / subfields) must only
+  // act on a beam the planner explicitly clicked
+  const selectedBeam = (selectedPlan?.beams ?? []).find(b => b.id === selectedBeamId) ?? null;
+
+  // reset beam-detail state when the selected plan changes
+  useEffect(() => {
+    setSelectedBeamId(null);
+    setCps(null);
+    setSubfields([]);
+    setCpIndex(0);
+    setDraftLeaves(null);
+  }, [selectedPlan?.id]);
 
   // sync the editor when switching plans
   const [loadedRefPointsFor, setLoadedRefPointsFor] = useState(null);
@@ -303,24 +310,11 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
         throw new Error(d.error || `Dose calculation failed (${res.status})`);
       }
       const r = await res.json();
-      referenceDoseFileIdRef.current = r.doseFileId ?? referenceDoseFileIdRef.current;
       setOpNote(`Dose computed → RTDOSE file #${r.doseFileId ?? '?'}`);
     } catch (err) {
       setFormError(err.message);
     } finally {
       setDoseBusy(false);
-    }
-  };
-
-  const handleLoadPointDoses = async () => {
-    if (!selectedPlan) return;
-    setFormError('');
-    try {
-      const rows = await ebrt.getPointDoses(selectedPlan.id);
-      setPointDoses(rows);
-      setShowPointDoses(true);
-    } catch (err) {
-      setFormError(err.message);
     }
   };
 
@@ -624,7 +618,7 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
               {dosePerFx} Gy per fraction
             </Typography>
           )}
-          <TextField size="small" select label="Normalization" value={normalization}
+          <TextField size="small" select label="Rx normalization" value={normalization}
                      onChange={e => setNormalization(e.target.value)}
                      inputProps={{ style: { fontSize: '0.7rem' } }}>
             {NORMALIZATIONS.map(n => <MenuItem key={n.id} value={n.id}>{n.label}</MenuItem>)}
@@ -763,6 +757,12 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
           </Table>
 
           {/* selected-beam detail: control points + MLC + subfields + opposing */}
+          {!selectedBeam && (selectedPlan?.beams ?? []).length > 0 && (
+            <Typography variant="caption" sx={{ display: 'block', px: 1, py: 0.5, fontSize: '0.58rem', color: 'text.disabled',
+                       borderBottom: '1px solid rgba(88,196,220,0.12)' }}>
+              Click a field row to edit MLC, subfields or add an opposing field.
+            </Typography>
+          )}
           {selectedBeam && (
             <Box sx={{ px: 1, py: 0.75, display: 'flex', flexDirection: 'column', gap: 0.5,
                        borderBottom: '1px solid rgba(88,196,220,0.12)' }}>
@@ -903,14 +903,6 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
                   {doseBusy ? 'Calculating…' : 'Calc Dose'}
                 </Button>
               </Tooltip>
-              <Tooltip title="Reference point dose report (Eclipse Reference Points tab)">
-                <Button size="small" variant={showPointDoses ? 'contained' : 'outlined'}
-                        startIcon={<PinDrop fontSize="small" />}
-                        onClick={handleLoadPointDoses}
-                        sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
-                  Point Doses
-                </Button>
-              </Tooltip>
               <Tooltip title="Generate a couch structure ROI for this study (Eclipse Couch Structures)">
                 <Button size="small" variant="outlined" startIcon={<Hotel fontSize="small" />}
                         onClick={handleAddCouch}
@@ -949,42 +941,6 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
                 ))}
                 {(checks.errors ?? []).length === 0 && (checks.warnings ?? []).length === 0 && (
                   <Alert severity="success" sx={{ py: 0, fontSize: '0.6rem' }}>No issues</Alert>
-                )}
-              </Box>
-            )}
-
-            {showPointDoses && (
-              <Box sx={{ border: '1px solid rgba(88,196,220,0.12)', borderRadius: 0.5, maxHeight: 160, overflow: 'auto' }}>
-                {(pointDoses ?? []).length === 0 && (
-                  <Typography variant="caption" sx={{ display: 'block', px: 1, py: 0.5, fontSize: '0.6rem', color: 'text.disabled' }}>
-                    No reference points on this plan
-                  </Typography>
-                )}
-                {(pointDoses ?? []).length > 0 && (
-                  <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.58rem', py: 0.15, px: 0.75, fontFamily: 'IBM Plex Mono, monospace' } }}>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Point</TableCell>
-                        <TableCell>Type</TableCell>
-                        <TableCell align="right">Dose (cGy)</TableCell>
-                        <TableCell align="right">Per fx</TableCell>
-                        <TableCell align="right">% Rx</TableCell>
-                        <TableCell align="right">Limit</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {(pointDoses ?? []).map((p, i) => (
-                        <TableRow key={`${p.name}-${i}`}>
-                          <TableCell>{p.inGrid === false ? `${p.name} (off-grid)` : p.name}</TableCell>
-                          <TableCell>{p.type ?? (p.x == null ? 'DPV' : 'POINT')}</TableCell>
-                          <TableCell align="right">{p.totalDoseCgy != null ? p.totalDoseCgy.toFixed(1) : '—'}</TableCell>
-                          <TableCell align="right">{p.perFractionCgy != null ? p.perFractionCgy.toFixed(1) : '—'}</TableCell>
-                          <TableCell align="right">{p.pctOfRx != null ? `${p.pctOfRx.toFixed(0)}%` : '—'}</TableCell>
-                          <TableCell align="right">{p.totalDoseLimitGy != null ? `${p.totalDoseLimitGy} Gy` : '—'}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
                 )}
               </Box>
             )}

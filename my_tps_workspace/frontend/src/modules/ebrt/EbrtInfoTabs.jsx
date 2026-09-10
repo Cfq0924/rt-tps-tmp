@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { Box, Typography, Tabs, Tab, Table, TableBody, TableCell, TableHead,
   TableRow, TextField, Button } from '@mui/material';
-import { trilinearSample } from '../../lib/doseSampling.js';
+import { toSamplingGeom, trilinearSample } from '../../lib/doseSampling.js';
 
 /**
  * EbrtInfoTabs - the Information (Info) window at the bottom of the EBRT
@@ -19,6 +19,19 @@ import { trilinearSample } from '../../lib/doseSampling.js';
 export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = null, doseMeta = null, prescriptionCgy = null, onPatchCalcModels = null }) {
   const [tab, setTab] = useState(0);
   const [calcDraft, setCalcDraft] = useState(null);
+  // backend point-dose report used when the viewer has no dose grid loaded
+  const [remotePoints, setRemotePoints] = useState(null);
+  const [remoteError, setRemoteError] = useState('');
+
+  useEffect(() => {
+    if (tab !== 2 || doseGrid || !plan?.id) return;
+    let alive = true;
+    fetch(`/api/ebrt/plans/${plan.id}/point-doses`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error('point dose report failed'))))
+      .then(d => { if (alive) { setRemotePoints(d.points ?? []); setRemoteError(''); } })
+      .catch(e => { if (alive) setRemoteError(e.message); });
+    return () => { alive = false; };
+  }, [tab, doseGrid, plan?.id]);
 
   // sync the editable calc-model draft when the selected plan changes
   useEffect(() => {
@@ -41,14 +54,9 @@ export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = 
   const pointDoses = useMemo(() => {
     if (!doseGrid || !doseMeta || referencePoints.length === 0) return null;
     return referencePoints.map(pt => {
-      const dose = trilinearSample(doseGrid, {
-        imagePosition: doseMeta.imagePosition,
-        imageOrientation: doseMeta.imageOrientation,
-        pixelSpacing: doseMeta.pixelSpacing,
-        gridFrameOffsetVector: doseMeta.gridFrameOffsetVector,
-        cols: doseMeta.columns,
-        rows: doseMeta.rows,
-      }, [pt.x, pt.y, pt.z]);
+      const dose = pt.x == null
+        ? null
+        : trilinearSample(doseGrid, toSamplingGeom(doseMeta), [pt.x, pt.y, pt.z]);
       return { name: pt.name, doseCgy: dose, inGrid: dose != null };
     });
   }, [doseGrid, doseMeta, referencePoints]);
@@ -140,35 +148,46 @@ export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = 
           <Table size="small" sx={{ '& .MuiTableCell-root': cellSx }}>
             <TableHead>
               <TableRow>
-                <TableCell sx={headSx}>Point</TableCell>
-                <TableCell sx={headSx}>Location (mm)</TableCell>
-                <TableCell align="right" sx={headSx}>Total Dose (cGy)</TableCell>
-                <TableCell align="right" sx={headSx}>% of Rx</TableCell>
-                <TableCell sx={headSx}>In Grid</TableCell>
+                {['Point', 'Location (mm)', 'Total Dose (cGy)', 'Per fx', '% of Rx', 'Limit'].map(h => (
+                  <TableCell key={h} align={h === 'Point' || h === 'Location (mm)' ? 'left' : 'right'} sx={headSx}>{h}</TableCell>
+                ))}
               </TableRow>
             </TableHead>
             <TableBody>
-              {referencePoints.length === 0 && (
-                <TableRow><TableCell colSpan={5} sx={{ color: 'text.disabled' }}>
+              {referencePoints.length === 0 && (remotePoints ?? []).length === 0 && (
+                <TableRow><TableCell colSpan={6} sx={{ color: 'text.disabled' }}>
                   No reference points on this plan (add them in the REFERENCE POINTS section of the panel).
                 </TableCell></TableRow>
               )}
-              {referencePoints.map((pt, i) => {
+              {remoteError && (
+                <TableRow><TableCell colSpan={6} sx={{ color: 'error.main' }}>{remoteError}</TableCell></TableRow>
+              )}
+              {/* with the dose grid loaded: sample locally (live, follows windowing) */}
+              {doseGrid && referencePoints.map((pt, i) => {
                 const d = pointDoses?.[i];
+                const limit = pt.totalDoseLimitGy;
                 return (
-                  <TableRow key={i} hover>
-                    <TableCell>{pt.name}</TableCell>
+                  <TableRow key={`${pt.name}-${i}`} hover>
+                    <TableCell>{pt.name}{pt.isDpv || pt.type === 'TARGET' ? ' (DPV)' : ''}</TableCell>
                     <TableCell>{[pt.x, pt.y, pt.z].map(v => (v ?? 0).toFixed(1)).join(', ')}</TableCell>
                     <TableCell align="right">{d?.inGrid ? d.doseCgy.toFixed(1) : '—'}</TableCell>
+                    <TableCell align="right">{d?.inGrid && plan?.numberOfFractions ? (d.doseCgy / plan.numberOfFractions).toFixed(1) : '—'}</TableCell>
                     <TableCell align="right">{d?.inGrid && prescriptionCgy ? `${(d.doseCgy / prescriptionCgy * 100).toFixed(1)}%` : '—'}</TableCell>
-                    <TableCell>
-                      {d == null ? '—' : d.inGrid
-                        ? <Box component="span" sx={{ color: '#9ae66e' }}>●</Box>
-                        : <Box component="span" sx={{ color: 'text.disabled' }}>outside</Box>}
-                    </TableCell>
+                    <TableCell align="right">{limit != null ? `${limit} Gy` : '—'}</TableCell>
                   </TableRow>
                 );
               })}
+              {/* without the dose grid: backend report (samples the latest RTDOSE) */}
+              {!doseGrid && (remotePoints ?? []).map((p, i) => (
+                <TableRow key={`${p.name}-r-${i}`} hover>
+                  <TableCell>{p.name}{p.isDpv || p.type === 'TARGET' ? ' (DPV)' : ''}{p.inGrid === false ? ' · off-grid' : ''}</TableCell>
+                  <TableCell>{[p.x, p.y, p.z].map(v => (v ?? 0).toFixed(1)).join(', ')}</TableCell>
+                  <TableCell align="right">{p.totalDoseCgy != null ? p.totalDoseCgy.toFixed(1) : '—'}</TableCell>
+                  <TableCell align="right">{p.perFractionCgy != null ? p.perFractionCgy.toFixed(1) : '—'}</TableCell>
+                  <TableCell align="right">{p.pctOfRx != null ? `${p.pctOfRx.toFixed(1)}%` : '—'}</TableCell>
+                  <TableCell align="right">{p.totalDoseLimitGy != null ? `${p.totalDoseLimitGy} Gy` : '—'}</TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         )}

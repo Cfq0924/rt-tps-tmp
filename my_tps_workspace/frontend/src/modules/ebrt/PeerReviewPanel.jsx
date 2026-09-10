@@ -129,6 +129,7 @@ export default function PeerReviewPanel({ plan, currentSliceIdx, onJumpToSlice, 
       }
       const { session } = await res.json();
       setDetail(session);
+      setCouch({ vrt: '', lng: '', lat: '' }); // don't leak shifts into the next session
       setSessions(prev => prev.map(s => (s.id === session.id ? { ...s, status: session.status, decision: session.decision } : s)));
       onPlanUpdated?.();
     } catch (err) {

@@ -6,6 +6,7 @@ import { getDoseGrid, invalidateDoseGrid, parseRTDose } from './rtDoseService.js
 import { getPlan } from './ebrtPlanService.js';
 import { loadStudyMeta } from './exportService.js';
 import { parseRTStruct } from './rtStructService.js';
+import { latestFileByModality, sampleDoseAtPoint } from './dicomQuery.js';
 
 const { data: { datasetToBuffer } } = dcmjs;
 
@@ -66,36 +67,9 @@ function findRefPoint(plan, name = null) {
     ?? pts[0] ?? null;
 }
 
-/** Dose (cGy) at a reference point from the grid, or null when outside. */
-function pointDose(grid, doseMeta, pt) {
-  if (!pt || pt.x == null || pt.y == null || pt.z == null) return null;
-  const { rows, columns, numberOfFrames, imagePosition, pixelSpacing, gridFrameOffsetVector } = doseMeta;
-  const i = Math.round((pt.x - imagePosition.x) / pixelSpacing.j);
-  const j = Math.round((pt.y - imagePosition.y) / pixelSpacing.i);
-  let k = 0, best = Infinity;
-  for (let f = 0; f < gridFrameOffsetVector.length; f++) {
-    const d = Math.abs(gridFrameOffsetVector[f] - (pt.z - imagePosition.z));
-    if (d < best) { best = d; k = f; }
-  }
-  if (i < 0 || i >= columns || j < 0 || j >= rows || k >= numberOfFrames) return null;
-  return grid[k * rows * columns + j * columns + i];
-}
-
-function latestRtDoseFile(db, studyId) {
-  return db.prepare(`
-    SELECT id, file_path FROM dicom_files
-    WHERE study_id = ? AND modality = 'RTDOSE'
-    ORDER BY id DESC LIMIT 1
-  `).get(studyId);
-}
-
-function latestRtStructFile(db, studyId) {
-  return db.prepare(`
-    SELECT id, file_path FROM dicom_files
-    WHERE study_id = ? AND modality = 'RTSTRUCT'
-    ORDER BY id DESC LIMIT 1
-  `).get(studyId);
-}
+const pointDose = sampleDoseAtPoint;
+const latestRtDoseFile = (db, studyId) => latestFileByModality(db, studyId, 'RTDOSE');
+const latestRtStructFile = (db, studyId) => latestFileByModality(db, studyId, 'RTSTRUCT');
 
 /** Even-odd scanline polygon fill on a cols×rows grid. */
 function fillPolygons(mask, cols, rows, polys) {
