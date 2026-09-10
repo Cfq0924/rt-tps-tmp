@@ -205,15 +205,30 @@ export function chainSegments(segments, tol = 1e-4) {
  * @param {number} value - fill value
  */
 export function polygonsToMask(mask, cols, rows, polygons, value) {
+  // Even-odd across ALL polygons of the slice (RTSTRUCT semantics): the
+  // crossings of every contour are pooled per scanline, so a nested contour
+  // carves a hole instead of being filled over. Single-polygon calls are
+  // unaffected.
+  const allEdges = [];
+  let yMin = Infinity, yMax = -Infinity;
   for (const poly of polygons) {
     const n = poly.length / 2;
     if (n < 3) continue;
-    // per-row scanline crossings
-    const jMin = Math.max(0, Math.ceil(Math.min(...poly.filter((_, i) => i % 2 === 1))));
-    const jMax = Math.min(rows - 1, Math.floor(Math.max(...poly.filter((_, i) => i % 2 === 1))));
-    for (let j = jMin; j <= jMax; j++) {
-      const yc = j; // sample at pixel center row
-      const xs = [];
+    allEdges.push(poly);
+    for (let e = 0; e < n; e++) {
+      const ya = poly[e * 2 + 1];
+      if (ya < yMin) yMin = ya;
+      if (ya > yMax) yMax = ya;
+    }
+  }
+  if (allEdges.length === 0) return;
+  const jMin = Math.max(0, Math.ceil(yMin));
+  const jMax = Math.min(rows - 1, Math.floor(yMax));
+  for (let j = jMin; j <= jMax; j++) {
+    const yc = j; // sample at pixel center row
+    const xs = [];
+    for (const poly of allEdges) {
+      const n = poly.length / 2;
       for (let e = 0; e < n; e++) {
         const xa = poly[e * 2];
         const ya = poly[e * 2 + 1];
@@ -223,13 +238,13 @@ export function polygonsToMask(mask, cols, rows, polygons, value) {
           xs.push(xa + ((yc - ya) / (yb - ya)) * (xb - xa));
         }
       }
-      xs.sort((a, b) => a - b);
-      for (let k = 0; k + 1 < xs.length; k += 2) {
-        const xa = Math.max(0, Math.ceil(xs[k]));
-        const xb = Math.min(cols - 1, Math.floor(xs[k + 1]));
-        for (let i = xa; i <= xb; i++) {
-          mask[j * cols + i] = value;
-        }
+    }
+    xs.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const xa = Math.max(0, Math.ceil(xs[k]));
+      const xb = Math.min(cols - 1, Math.floor(xs[k + 1]));
+      for (let i = xa; i <= xb; i++) {
+        mask[j * cols + i] = value;
       }
     }
   }

@@ -121,6 +121,72 @@ describe('mask ↔ polygon roundtrip', () => {
   });
 });
 
+describe('persistence round-trip (serializeSegment → loadFromServer semantics)', () => {
+  const CT = {
+    imagePosition: { x: -249.51171875, y: -446.51171875, z: -931.3 },
+    imageOrientation: { x: [1, 0, 0], y: [0, 1, 0] },
+    pixelSpacing: { i: 0.9765625, j: 0.9765625 },
+  };
+  const Z = CT.imagePosition.z;
+
+  // mirrors useContouring: serializeSegment exports polygons in patient mm
+  // (toFixed(4)); loadFromServer maps them back and refills even-odd
+  function serializeLoad(mask, cols, rows) {
+    const polys = maskToPolygons(mask, cols, rows, 1);
+    const contours = polys.map(poly => {
+      const flat = [];
+      for (let p = 0; p < poly.length; p += 2) {
+        const pt = imagePixelToPatient(poly[p], poly[p + 1], Z, CT);
+        flat.push(Number(pt[0].toFixed(4)), Number(pt[1].toFixed(4)), Number(pt[2].toFixed(4)));
+      }
+      return flat;
+    });
+    const out = new Uint8Array(cols * rows);
+    const allPts = contours.map(poly => {
+      const pts = [];
+      for (let p = 0; p + 2 < poly.length; p += 3) {
+        const { i, j } = patientToImagePixel([poly[p], poly[p + 1], poly[p + 2]], CT);
+        pts.push(i, j);
+      }
+      return pts;
+    });
+    polygonsToMask(out, cols, rows, allPts, 1);
+    return { contours, out };
+  }
+
+  it('polygonsToMask is even-odd across polygons: nested contour carves a hole', () => {
+    const cols = 40, rows = 40;
+    const outer = [[5, 5], [34, 5], [34, 34], [5, 34]].flat();
+    const inner = [[12, 12], [27, 12], [27, 27], [12, 27]].flat();
+    const mask = new Uint8Array(cols * rows);
+    polygonsToMask(mask, cols, rows, [outer, inner], 1);
+    expect(mask[16 * cols + 16]).toBe(0); // inside the hole
+    expect(mask[8 * cols + 8]).toBe(1);   // in the ring
+    // the inner polygon alone would fill its area — even-odd is what keeps it
+    const solid = new Uint8Array(cols * rows);
+    polygonsToMask(solid, cols, rows, [inner], 1);
+    expect(solid[16 * cols + 16]).toBe(1);
+  });
+
+  it('restores a ring exactly — holes survive save/load (was: hole filled on reload)', () => {
+    const cols = 64, rows = 64;
+    const mask = new Uint8Array(cols * rows);
+    fillRect(mask, cols, rows, 10, 10, 50, 50, 1);
+    fillRect(mask, cols, rows, 20, 20, 40, 40, 0);
+    const { contours, out } = serializeLoad(mask, cols, rows);
+    expect(contours.length).toBe(2);
+    expect([...out]).toEqual([...mask]);
+  });
+
+  it('single solid rect round-trips voxel-exact', () => {
+    const cols = 48, rows = 48;
+    const mask = new Uint8Array(cols * rows);
+    fillRect(mask, cols, rows, 5, 6, 40, 30, 1);
+    const { out } = serializeLoad(mask, cols, rows);
+    expect([...out]).toEqual([...mask]);
+  });
+});
+
 describe('chainSegments', () => {
   it('chains collinear segments into one polyline (keeping interior vertices)', () => {
     const segs = [

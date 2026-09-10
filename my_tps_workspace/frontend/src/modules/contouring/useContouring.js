@@ -149,15 +149,17 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
           const idx = uidToIdx.get(s.sopInstanceUID);
           if (idx === undefined) continue;
           const mask = new Uint8Array(ctGeom.cols * ctGeom.rows);
-          for (const poly of s.contours) {
-            // patient → image px, then scanline fill
+          // patient → image px, then one even-odd scanline fill so nested
+          // contours (holes) are preserved across the save/load round-trip
+          const allPts = (s.contours ?? []).map(poly => {
             const pts = [];
             for (let p = 0; p < poly.length; p += 3) {
               const { i, j } = patientToImagePixel([poly[p], poly[p + 1], poly[p + 2]], ctGeom);
               pts.push(i, j);
             }
-            polygonsToMask(mask, ctGeom.cols, ctGeom.rows, [pts], 1);
-          }
+            return pts;
+          });
+          polygonsToMask(mask, ctGeom.cols, ctGeom.rows, allPts, 1);
           if (mask.some(v => v === 1)) sliceMap.set(idx, mask);
         }
         masksRef.current.set(meta.id, sliceMap);

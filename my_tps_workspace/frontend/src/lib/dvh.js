@@ -79,8 +79,9 @@ export function collectStructureDose(structure, doseGrid, doseGeom, ctFiles, ctG
     // voxel column/row directly (contours are on the dose plane z when the
     // CT slice maps to it)
     const mask = new Uint8Array(voxelsPerFrame);
-    const pts = [];
+    const contourPts = [];
     for (const poly of slice.contours ?? []) {
+      const pts = [];
       for (let p = 0; p + 2 < poly.length; p += 3) {
         const dx = poly[p] - doseGeom.imagePosition.x;
         const dy = poly[p + 1] - doseGeom.imagePosition.y;
@@ -89,8 +90,9 @@ export function collectStructureDose(structure, doseGrid, doseGeom, ctFiles, ctG
         const dj = dy / doseGeom.pixelSpacing.i;
         pts.push(di, dj);
       }
+      if (pts.length >= 6) contourPts.push(pts);
     }
-    polygonsToMaskFn(mask, doseCols, doseRows, [pts], 1);
+    polygonsToMaskFn(mask, doseCols, doseRows, contourPts, 1);
 
     const frame = k * voxelsPerFrame;
     for (let v = 0; v < voxelsPerFrame; v++) {
