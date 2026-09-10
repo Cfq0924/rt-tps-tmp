@@ -45,6 +45,8 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
   const [doseAlgorithm, setDoseAlgorithm] = useState('PENCIL_BEAM');
   const [gridSize, setGridSize] = useState('2');
   const [heterogeneity, setHeterogeneity] = useState(false);
+  const [courseId, setCourseId] = useState('');
+  const [targetStructure, setTargetStructure] = useState('');
 
   // add-beam form state
   const [beamType, setBeamType] = useState('STATIC');
@@ -63,10 +65,17 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
   const [refPointsDirty, setRefPointsDirty] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
 
+  // load courses once when the workspace opens
+  useEffect(() => {
+    ebrt.refreshCourses?.().catch(() => {});
+  }, []);
+
   // backend wiring state (B2–B6)
   const [selectedBeamId, setSelectedBeamId] = useState(null);
   const [normMode, setNormMode] = useState('ISOCENTER');
   const [normValue, setNormValue] = useState('');
+  const [coversDose, setCoversDose] = useState('');
+  const [coversVol, setCoversVol] = useState('');
   const [opNote, setOpNote] = useState('');
   const [revisions, setRevisions] = useState([]);
   const [showRevisions, setShowRevisions] = useState(false);
@@ -88,6 +97,20 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
     setRefPointsDirty(false);
   }
 
+  const [newCourseName, setNewCourseName] = useState('');
+
+  const handleCreateCourse = async () => {
+    if (!newCourseName.trim()) return;
+    setFormError('');
+    try {
+      const course = await ebrt.createCourse(newCourseName.trim());
+      setCourseId(course.id);
+      setNewCourseName('');
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
   const handleCreatePlan = async () => {
     setFormError('');
     try {
@@ -102,10 +125,18 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
         dose_algorithm: doseAlgorithm,
         grid_size_mm: numOrNull(gridSize) ?? 2,
         heterogeneity_correction: heterogeneity,
+        course_id: courseId ? Number(courseId) : undefined,
+        target_structure_name: targetStructure.trim() || undefined,
+        dose_per_fraction_gy: numOrNull(doseGy) && numOrNull(fx) ? numOrNull(doseGy) / numOrNull(fx) : undefined,
+        reference_points: targetStructure.trim() ? [{
+          name: `${targetStructure.trim()} Rx`, isDpv: true, type: 'TARGET',
+          totalDoseLimitGy: numOrNull(doseGy) ?? 0,
+        }] : undefined,
       });
       setName('');
       setDoseGy('');
       setFx('');
+      setTargetStructure('');
       setShowNewPlan(false);
     } catch (err) {
       setFormError(err.message);
@@ -218,7 +249,10 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
     setFormError('');
     setOpNote('');
     try {
-      const r = await ebrt.normalizePlan(selectedPlan.id, normMode, normValue === '' ? undefined : Number(normValue));
+      const payload = normMode === 'PERCENT_COVERS'
+        ? { cover: numOrNull(coversDose), ofVolume: numOrNull(coversVol) }
+        : (normValue === '' ? undefined : Number(normValue));
+      const r = await ebrt.normalizePlan(selectedPlan.id, normMode, payload);
       setOpNote(`Normalized (${normMode}) ×${r?.factor?.toFixed?.(4) ?? r?.factor ?? '?'}`);
     } catch (err) {
       setFormError(err.message);
@@ -488,11 +522,27 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
           </Typography>
           <TextField size="small" label="Plan name" value={name} onChange={e => setName(e.target.value)}
                      inputProps={{ style: { fontSize: '0.7rem' } }} />
+          <TextField size="small" select label="Course" value={courseId}
+                     onChange={e => setCourseId(e.target.value)}
+                     inputProps={{ style: { fontSize: '0.7rem' } }}>
+            <MenuItem value="" sx={{ fontSize: '0.7rem' }}>— none —</MenuItem>
+            {(ebrt.courses ?? []).map(c => <MenuItem key={c.id} value={c.id} sx={{ fontSize: '0.7rem' }}>{c.name}</MenuItem>)}
+          </TextField>
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <TextField size="small" label="New course" value={newCourseName}
+                       onChange={e => setNewCourseName(e.target.value)}
+                       inputProps={{ style: { fontSize: '0.7rem' } }} />
+            <Button size="small" onClick={handleCreateCourse} disabled={!newCourseName.trim()}
+                    sx={{ fontSize: '0.6rem', whiteSpace: 'nowrap' }}>Add</Button>
+          </Box>
           <TextField size="small" select label="Machine" value={machineId}
                      onChange={e => { setMachineId(e.target.value); setEnergyMv(getMachine(e.target.value).energies[0]); }}
                      inputProps={{ style: { fontSize: '0.7rem' } }}>
             {MACHINES.map(m => <MenuItem key={m.id} value={m.id}>{m.label}</MenuItem>)}
           </TextField>
+          <TextField size="small" label="Target structure" value={targetStructure}
+                     onChange={e => setTargetStructure(e.target.value)}
+                     inputProps={{ style: { fontSize: '0.7rem' } }} />
           <TextField size="small" select label="Energy (MV)" value={energyMv}
                      onChange={e => setEnergyMv(Number(e.target.value))}
                      inputProps={{ style: { fontSize: '0.7rem' } }}>
@@ -737,12 +787,25 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
                 <MenuItem value="TARGET_MEAN" sx={{ fontSize: '0.7rem' }}>Target Mean</MenuItem>
                 <MenuItem value="TARGET_MIN" sx={{ fontSize: '0.7rem' }}>Target Min</MenuItem>
                 <MenuItem value="PERCENT_OF_TARGET" sx={{ fontSize: '0.7rem' }}>% of Target (cGy)</MenuItem>
+                <MenuItem value="PERCENT_COVERS" sx={{ fontSize: '0.7rem' }}>% covers % of Target</MenuItem>
               </TextField>
               {normMode === 'ISOCENTER' || normMode === 'PERCENT_OF_TARGET' ? (
                 <TextField size="small" label={normMode === 'ISOCENTER' ? '%' : 'cGy'}
                            value={normValue} onChange={e => setNormValue(e.target.value)}
                            sx={{ width: 70 }}
                            inputProps={{ style: { fontSize: '0.65rem' } }} />
+              ) : null}
+              {normMode === 'PERCENT_COVERS' ? (
+                <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', width: '100%' }}>
+                  <TextField size="small" label="Dose %" value={coversDose}
+                             onChange={e => setCoversDose(e.target.value)}
+                             sx={{ width: 80 }} inputProps={{ style: { fontSize: '0.65rem' } }} />
+                  <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary' }}>% covers</Typography>
+                  <TextField size="small" label="Vol %" value={coversVol}
+                             onChange={e => setCoversVol(e.target.value)}
+                             sx={{ width: 80 }} inputProps={{ style: { fontSize: '0.65rem' } }} />
+                  <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary' }}>% of target</Typography>
+                </Box>
               ) : null}
               <Tooltip title="Rescale the plan dose grid (requires an associated dose file)">
                 <Button size="small" variant="outlined" startIcon={<Straighten fontSize="small" />}

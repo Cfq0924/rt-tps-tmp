@@ -10,6 +10,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 export function useEbrtPlans({ studyId, enabled }) {
   const [plans, setPlans] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [courses, setCourses] = useState([]);
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -147,6 +148,30 @@ export function useEbrtPlans({ studyId, enabled }) {
     setPlans(prev => prev.map(p => (p.id === plan.id ? plan : p)));
   }, []);
 
+  const refreshCourses = useCallback(async () => {
+    const res = await fetch(`/api/courses/study/${studyId}`, { credentials: 'include' });
+    if (!res.ok) throw new Error('Failed to load courses');
+    const { courses: rows } = await res.json();
+    setCourses(rows);
+    return rows;
+  }, [studyId]);
+
+  const createCourse = useCallback(async (name, intent) => {
+    const res = await fetch(`/api/courses/study/${studyId}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, intent }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Failed to create course');
+    }
+    const { course } = await res.json();
+    await refreshCourses();
+    return course;
+  }, [studyId, refreshCourses]);
+
   const refreshTemplates = useCallback(async () => {
     const res = await fetch('/api/ebrt/templates', { credentials: 'include' });
     if (!res.ok) throw new Error('Failed to list templates');
@@ -281,7 +306,8 @@ export function useEbrtPlans({ studyId, enabled }) {
   }, [postJson]);
 
   return {
-    plans, templates, selectedPlan, selectedPlanId, setSelectedPlanId, selectPlan,
+    plans, templates, courses, refreshCourses, createCourse,
+    selectedPlan, selectedPlanId, setSelectedPlanId, selectPlan,
     loading, error,
     createPlan, importFromRTPlan, updatePlan, deletePlan,
     addBeam, updateBeam, deleteBeam,

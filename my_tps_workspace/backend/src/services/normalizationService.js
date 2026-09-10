@@ -22,6 +22,26 @@ const { data: { datasetToBuffer } } = dcmjs;
  *   VALUE : all doses scaled by `value` / 100
  */
 
+/**
+ * Binary-search the dose scaling factor such that `coverDose` (cGy, already
+ * scaled) covers `ofVol`% of the sorted target-voxel doses (cGy).
+ * Pure function — exported for unit testing.
+ */
+export function coverageFactor(sortedDosesAsc, coverDose, ofVol) {
+  let lo = 1e-4, hi = 1e4, f = 1;
+  for (let it = 0; it < 60; it++) {
+    f = (lo + hi) / 2;
+    const threshold = coverDose / f;
+    let lo2 = 0, hi2 = sortedDosesAsc.length;
+    while (lo2 < hi2) {
+      const mid = (lo2 + hi2) >> 1;
+      if (sortedDosesAsc[mid] < threshold) lo2 = mid + 1; else hi2 = mid;
+    }
+    if ((sortedDosesAsc.length - lo2) / sortedDosesAsc.length * 100 >= ofVol) hi = f; else lo = f;
+  }
+  return f;
+}
+
 const MODES = new Set([
   'TARGET_MAX', 'TARGET_MEAN', 'TARGET_MIN',
   'PERCENT_COVERS',            // X% covers Y% of target structure
@@ -113,7 +133,7 @@ function sampleDose(grid, geom, p) {
 
 /**
  * Dose statistics of a named target structure on the dose grid.
- * @returns {Promise<{max:number, mean:number, min:number, voxelCount:number}|null>}
+ * @returns {Promise<{max:number, mean:number, min:number, voxelCount:number, doses:number[]}|null>}
  */
 export async function targetStructureStats({ studyId, structureName, doseGrid, doseMeta }) {
   const db = getDb();
@@ -124,7 +144,7 @@ export async function targetStructureStats({ studyId, structureName, doseGrid, d
   if (!roi) return null;
 
   const { rows, columns, numberOfFrames, imagePosition, pixelSpacing, gridFrameOffsetVector } = doseMeta;
-  const stats = { max: -Infinity, sum: 0, min: Infinity, voxelCount: 0 };
+  const stats = { max: -Infinity, sum: 0, min: Infinity, voxelCount: 0, doses: [] };
   for (let k = 0; k < numberOfFrames; k++) {
     const z = imagePosition.z + (gridFrameOffsetVector[k] ?? 0);
     const polys = [];
@@ -154,12 +174,11 @@ export async function targetStructureStats({ studyId, structureName, doseGrid, d
         if (v < stats.min) stats.min = v;
         stats.sum += v;
         stats.voxelCount++;
+        stats.doses.push(v);
       }
     }
   }
-  return stats.voxelCount > 0
-    ? { max: stats.max, mean: stats.sum / stats.voxelCount, min: stats.min, voxelCount: stats.voxelCount }
-    : null;
+  return stats.voxelCount > 0 ? stats : null;
 }
 
 /**
@@ -188,6 +207,27 @@ export async function computeNormalizationFactor({ studyId, plan, mode, value, d
   }
   if (mode === 'NONE') {
     return { factor: 1, description: 'no plan normalization' };
+  }
+  if (mode === 'PERCENT_COVERS') {
+    // Eclipse "___% covers ___% of Target Structure": scale so that
+    // `value.cover` % of the Rx dose covers `value.volume` % of the target volume
+    const cover = Number(value?.cover), ofVol = Number(value?.ofVolume);
+    if (!Number.isFinite(cover) || cover <= 0 || !Number.isFinite(ofVol) || ofVol <= 0 || ofVol > 100) {
+      throw Object.assign(new Error('PERCENT_COVERS needs { cover: %, ofVolume: % }'), { status: 400 });
+    }
+    const stats = await targetStructureStats({ studyId: plan.studyId, structureName: plan.targetStructureName, doseGrid, doseMeta });
+    if (!stats || !stats.doses?.length) throw Object.assign(new Error('target structure has no dose in the grid'), { status: 400 });
+    const doses = stats.doses.slice().sort((a, b) => a - b);
+    const coverDose = rx * (cover / 100);
+    const f = coverageFactor(doses, coverDose, ofVol);
+    // feasibility: at the solved factor, the hottest target voxel must reach the cover dose
+    if (stats.max * f < coverDose) {
+      throw Object.assign(
+        new Error(`Target cannot reach ${cover}% of Rx — max achievable is ${(stats.max * f / rx * 100).toFixed(1)}%`),
+        { status: 400 },
+      );
+    }
+    return { factor: f, description: `${cover}% of Rx covers ${ofVol}% of target` };
   }
   if (mode === 'ISOCENTER') {
     const v = value ?? 100;

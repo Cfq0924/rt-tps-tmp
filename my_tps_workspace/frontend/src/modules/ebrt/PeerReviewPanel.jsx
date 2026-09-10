@@ -15,6 +15,7 @@ import { RateReview, Send, Check, Close, MyLocation } from '@mui/icons-material'
  * @param {Function} props.onPlanUpdated - called after a decision changes the plan
  */
 export default function PeerReviewPanel({ plan, currentSliceIdx, onJumpToSlice, onPlanUpdated }) {
+  const [couch, setCouch] = useState({ vrt: '', lng: '', lat: '' });
   const [sessions, setSessions] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [detail, setDetail] = useState(null); // full session incl. comments
@@ -107,7 +108,20 @@ export default function PeerReviewPanel({ plan, currentSliceIdx, onJumpToSlice, 
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision }),
+        body: JSON.stringify({
+          decision,
+          ...(couch.vrt !== '' || couch.lng !== '' || couch.lat !== '' ? {
+            // one recorded shift per field (Eclipse Delta Couch Shifts shape)
+            deltaCouch: {
+              shifts: (plan.beams ?? []).map(b => ({
+                fieldId: b.id,
+                vrt: Number(couch.vrt) || 0,
+                lng: Number(couch.lng) || 0,
+                lat: Number(couch.lat) || 0,
+              })),
+            },
+          } : {}),
+        }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -230,6 +244,17 @@ export default function PeerReviewPanel({ plan, currentSliceIdx, onJumpToSlice, 
                         sx={{ fontSize: '0.58rem', py: 0.1 }}>
                   Add
                 </Button>
+              </Box>
+              <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                <Typography variant="caption" sx={{ fontSize: '0.55rem', color: 'text.secondary', fontFamily: 'mono' }}>
+                  Delta couch (cm, all fields)
+                </Typography>
+                <TextField size="small" label="Vrt" value={couch.vrt} onChange={e => setCouch(d => ({ ...d, vrt: e.target.value }))}
+                           sx={{ width: 60 }} inputProps={{ style: { fontSize: '0.6rem' } }} />
+                <TextField size="small" label="Lng" value={couch.lng} onChange={e => setCouch(d => ({ ...d, lng: e.target.value }))}
+                           sx={{ width: 60 }} inputProps={{ style: { fontSize: '0.6rem' } }} />
+                <TextField size="small" label="Lat" value={couch.lat} onChange={e => setCouch(d => ({ ...d, lat: e.target.value }))}
+                           sx={{ width: 60 }} inputProps={{ style: { fontSize: '0.6rem' } }} />
               </Box>
               <Box sx={{ display: 'flex', gap: 0.5 }}>
                 <Button size="small" variant="contained" color="success" startIcon={<Check fontSize="small" />}

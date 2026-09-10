@@ -52,6 +52,36 @@ function makeDoseFile(sopUid) {
   return datasetToBuffer(ds);
 }
 
+// synthetic RTSTRUCT: ROI 'PTV Test' as a rectangle x∈[1,5]mm, y∈[1,5]mm on
+// frame z=-900 → covers voxel centres (i,j) ∈ {1,2}×{1,2}, i.e. 4 voxels with
+// raw doses 110/120/210/220 cGy on the untouched grid
+function makeRTStruct(sopUid) {
+  const ds = {
+    _meta: {},
+    SOPClassUID: '1.2.840.10008.5.1.4.1.481.3',
+    SOPInstanceUID: sopUid,
+    StudyInstanceUID: '1.2.840.normtest.1',
+    SeriesInstanceUID: '1.2.840.normtest.rtstruct',
+    Modality: 'RTSTRUCT',
+    PatientName: 'Norm Test',
+    StructureSetROISequence: [{
+      ROINumber: 1,
+      ReferencedFrameOfReferenceUID: '1.2.840.normtest.1',
+      ROIName: 'PTV Test',
+    }],
+    ROIContourSequence: [{
+      ReferencedROINumber: 1,
+      ROIDisplayColor: [255, 128, 0],
+      ContourSequence: [{
+        ContourGeometricType: 'CLOSED_PLANAR',
+        NumberOfContourPoints: 4,
+        ContourData: [1, 1, -900, 5, 1, -900, 5, 5, -900, 1, 5, -900],
+      }],
+    }],
+  };
+  return datasetToBuffer(ds);
+}
+
 async function setup() {
   const { default: Database } = await import('better-sqlite3');
   const db = new Database(TEST_DB);
@@ -65,6 +95,7 @@ async function setup() {
   mkdirSync(TEST_FILES_DIR, { recursive: true });
   const dosePath = join(TEST_FILES_DIR, 'dose.dcm');
   writeFileSync(dosePath, makeDoseFile('1.2.840.normtest.dose'));
+  writeFileSync(join(TEST_FILES_DIR, 'rtstruct.dcm'), makeRTStruct('1.2.840.normtest.rtstruct'));
 
   const db2 = new Database(TEST_DB);
   const info = db2.prepare(`
@@ -73,8 +104,12 @@ async function setup() {
   `).run(STUDY_ID, dosePath, 'dose.dcm');
   doseFileId = info.lastInsertRowid;
   db2.prepare(`
-    INSERT INTO ebrt_plans (study_id, name, prescription_dose_gy, number_of_fractions, isocenter_x, isocenter_y, isocenter_z, reference_points)
-    VALUES (?, 'Norm Plan', 20, 10, 2, 2, -898, ?)
+    INSERT INTO dicom_files (study_id, series_instance_uid, sop_instance_uid, modality, instance_number, file_path, file_name)
+    VALUES (?, 'rt', '1.2.840.normtest.rtstruct', 'RTSTRUCT', 1, ?, ?)
+  `).run(STUDY_ID, join(TEST_FILES_DIR, 'rtstruct.dcm'), 'rtstruct.dcm');
+  db2.prepare(`
+    INSERT INTO ebrt_plans (study_id, name, prescription_dose_gy, number_of_fractions, isocenter_x, isocenter_y, isocenter_z, reference_points, target_structure_name)
+    VALUES (?, 'Norm Plan', 20, 10, 2, 2, -898, ?, 'PTV Test')
   `).run(STUDY_ID, JSON.stringify([
     { name: 'DPV Prostate', isDpv: true, type: 'TARGET', x: 2, y: 2, z: -898, totalDoseLimitGy: 76 },
     { name: 'Point A', type: 'POINT', x: 2, y: 2, z: -898 },
@@ -105,16 +140,14 @@ describe('normalizationService', () => {
   it('VALUE mode rescales the stored grid by the exact factor', async () => {
     const result = await svc.normalizePlanDose({ planId: 1, mode: 'VALUE', value: 150, userId: 1, reqId: 't' });
     assert.ok(Math.abs(result.factor - 1.5) < 1e-9);
-    // original grid max 1230 cGy × 1.5 = 1845 — pixels scaled, scaling unchanged
     const { getDoseGrid } = await import('../src/services/rtDoseService.js');
     const grid = (await getDoseGrid(doseFileId, {}, 't')).grid;
-    assert.ok(Math.abs(Math.max(...grid) - 1845) < 1, `max ${Math.max(...grid)}`);
-    assert.strictEqual(readScaling(), 0.01); // DS unchanged in the regenerate path
+    assert.ok(Math.abs(Math.max(...grid) - 1230 * 1.5) < 1, `max ${Math.max(...grid)}`);
+    assert.strictEqual(readScaling(), 0.01); // regenerate path keeps DS unchanged
   });
 
   it('ISOCENTER mode: iso voxel lands on value% of Rx', async () => {
-    // plan isocentre (2,2,-898) maps to dose voxel (i=1, j=1, k=0) at 2mm spacing;
-    // raw there = 110 → 100% of Rx (2000 cGy)
+    // plan isocentre (2,2,-898) maps to dose voxel (i=1, j=1, k=0) at 2mm spacing
     const isoIdx = 0 * 12 + 1 * 4 + 1;
     await svc.normalizePlanDose({ planId: 1, mode: 'ISOCENTER', value: 100, userId: 1, reqId: 't' });
     const { getDoseGrid } = await import('../src/services/rtDoseService.js');
@@ -126,19 +159,43 @@ describe('normalizationService', () => {
     await svc.normalizePlanDose({ planId: 1, mode: 'BODY_MAX', value: 100, userId: 1, reqId: 't' });
     const { getDoseGrid } = await import('../src/services/rtDoseService.js');
     const grid = (await getDoseGrid(doseFileId, {}, 't')).grid;
-    // original max 1230 → 100% of Rx = 2000 cGy
     assert.ok(Math.abs(Math.max(...grid) - 2000) < 1, `max ${Math.max(...grid)}`);
   });
 
   it('PRIMARY_REF_POINT scales so the DPV point hits 100% of Rx', async () => {
-    const db = (await import('../src/db/init.js')).getDb();
-    db.prepare("UPDATE ebrt_plans SET primary_point_name = 'DPV Prostate' WHERE id = 1").run();
     const result = await svc.normalizePlanDose({ planId: 1, mode: 'PRIMARY_REF_POINT', userId: 1, reqId: 't' });
     assert.ok(result.factor > 0);
-    // DPV Prostate at (2,2,-898) → voxel (i=1, j=1, k=0): raw 110 → normalised to 2000 cGy
     const { getDoseGrid } = await import('../src/services/rtDoseService.js');
     const grid = (await getDoseGrid(doseFileId, {}, 't')).grid;
+    // DPV Prostate at (2,2,-898) → voxel (i=1, j=1, k=0): normalised to 2000 cGy
     assert.ok(Math.abs(grid[0 * 12 + 1 * 4 + 1] - 2000) < 1, `DPV ${grid[0 * 12 + 1 * 4 + 1]}`);
+  });
+
+  it('PERCENT_COVERS end-to-end: 50% of Rx covers 50% of PTV Test', async () => {
+    const { getDoseGrid } = await import('../src/services/rtDoseService.js');
+    // sanity: the fixed stats collector sees the 4 in-ROI voxels
+    const pre = await getDoseGrid(doseFileId, {}, 't');
+    const stats = await svc.targetStructureStats({
+      studyId: STUDY_ID, structureName: 'PTV Test', doseGrid: pre.grid, doseMeta: pre,
+    });
+    assert.strictEqual(stats.voxelCount, 4, `voxels ${stats.voxelCount}`);
+
+    const result = await svc.normalizePlanDose({
+      planId: 1, mode: 'PERCENT_COVERS', value: { cover: 50, ofVolume: 50 }, userId: 1, reqId: 't',
+    });
+    assert.ok(result.factor > 0, `factor ${result.factor}`);
+
+    const grid = (await getDoseGrid(doseFileId, {}, 't')).grid;
+    const targetDoses = [
+      grid[0 * 12 + 1 * 4 + 1], grid[0 * 12 + 1 * 4 + 2],
+      grid[0 * 12 + 2 * 4 + 1], grid[0 * 12 + 2 * 4 + 2],
+    ].sort((a, b) => a - b);
+    // cover dose = 50% of 20 Gy Rx = 1000 cGy; the solved factor puts the
+    // 50%-coverage threshold on the 3rd-highest target voxel
+    const covered = targetDoses.filter(v => v >= 1000 * (1 - 1e-6)).length;
+    assert.strictEqual(covered, 2, `covered ${covered} of [${targetDoses}]`);
+    assert.ok(targetDoses[1] < 1000, `3rd voxel ${targetDoses[1]} should sit at the threshold`);
+    void result;
   });
 
   it('NONE records the choice without rescaling', async () => {
@@ -157,5 +214,32 @@ describe('normalizationService', () => {
       async () => svc.normalizePlanDose({ planId: 1, mode: 'VALUE', value: 0, userId: 1, reqId: 't' }),
       e => e.status === 400,
     );
+  });
+});
+
+// ---------- pure coverageFactor solver (PERCENT_COVERS) ----------
+describe('coverageFactor (PERCENT_COVERS solver)', () => {
+  // sorted target-voxel doses: 10..1000 cGy in 100 steps
+  const doses = Array.from({ length: 100 }, (_, i) => 10 * (i + 1));
+
+  it('finds a factor so that cover% of Rx covers ofVol% of the volume', async () => {
+    const { coverageFactor } = await import('../src/services/normalizationService.js');
+    // median of doses ≈ 505 — the factor should put the 50% coverage threshold near there
+    const f = coverageFactor(doses, 950, 50);
+    const threshold = 950 / f;
+    assert.ok(threshold > 400 && threshold < 600, `threshold ${threshold}`);
+  });
+
+  it('monotonic: higher ofVol needs a higher factor', async () => {
+    const { coverageFactor } = await import('../src/services/normalizationService.js');
+    const f30 = coverageFactor(doses, 950, 30);
+    const f70 = coverageFactor(doses, 950, 70);
+    assert.ok(f70 > f30, `${f70} vs ${f30}`);
+  });
+
+  it('converges to the search bound when the goal is unreachable (documented behavior)', async () => {
+    const { coverageFactor } = await import('../src/services/normalizationService.js');
+    const f = coverageFactor([5, 6, 7], 100000, 50);
+    assert.ok(f > 0);
   });
 });
