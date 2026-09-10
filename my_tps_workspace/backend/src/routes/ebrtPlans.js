@@ -26,6 +26,7 @@ import {
   replaceControlPoints,
   listSubfields,
   addSubfield,
+  updateSubfield,
   deleteSubfield,
   createOpposingField,
 } from '../services/beamModelService.js';
@@ -246,6 +247,24 @@ router.post('/beams/:beamId/subfields', authMiddleware, (req, res, next) => {
       reqId: req.id,
     });
     res.status(201).json({ subfield });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /ebrt/beams/:beamId/subfields/:subfieldId — update name/weight/mlc
+router.patch('/beams/:beamId/subfields/:subfieldId', authMiddleware, (req, res, next) => {
+  try {
+    const subfield = updateSubfield({
+      beamId: parseInt(req.params.beamId, 10),
+      subfieldId: parseInt(req.params.subfieldId, 10),
+      name: req.body?.name,
+      weight: req.body?.weight,
+      mlc: req.body?.mlc,
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ subfield });
   } catch (err) {
     next(err);
   }

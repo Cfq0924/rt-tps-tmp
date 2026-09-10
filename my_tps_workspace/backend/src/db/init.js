@@ -31,6 +31,7 @@ function initializeSchema(db) {
   // CREATE TABLE IF NOT EXISTS won't touch pre-existing tables — add columns
   // introduced after initial release to older databases.
   addColumnIfMissing(db, 'segmentations', 'approved', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'segmentations', 'interpreted_type', 'TEXT');
   addColumnIfMissing(db, 'ebrt_plans', 'reference_points', 'TEXT');
   addColumnIfMissing(db, 'ebrt_plans', 'is_template', 'INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing(db, 'ebrt_plans', 'source_plan_id', 'INTEGER REFERENCES ebrt_plans(id)');

@@ -481,3 +481,452 @@ export function autoBodyMask(ctPixels, cols, rows, huThreshold = -300) {
   keepLargestComponent(mask, cols, rows);
   return mask;
 }
+
+/** 4-connected offsets (shared by morphology helpers). */
+const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+/**
+ * Label 4-connected components of a binary mask.
+ * @returns {{labels: Int32Array, sizes: number[]}} labels[i]=-1 when empty
+ */
+export function labelComponents4(mask, cols, rows) {
+  const labels = new Int32Array(mask.length).fill(-1);
+  const sizes = [];
+  const stack = [];
+  let next = 0;
+  for (let start = 0; start < mask.length; start++) {
+    if (!mask[start] || labels[start] !== -1) continue;
+    const id = next++;
+    let size = 0;
+    stack.push(start);
+    labels[start] = id;
+    while (stack.length) {
+      const idx = stack.pop();
+      size++;
+      const j = Math.floor(idx / cols);
+      const i = idx % cols;
+      for (const [di, dj] of N4) {
+        const ni = i + di, nj = j + dj;
+        if (ni < 0 || nj < 0 || ni >= cols || nj >= rows) continue;
+        const nIdx = nj * cols + ni;
+        if (mask[nIdx] && labels[nIdx] === -1) {
+          labels[nIdx] = id;
+          stack.push(nIdx);
+        }
+      }
+    }
+    sizes.push(size);
+  }
+  return { labels, sizes };
+}
+
+/**
+ * Eclipse Post Processing Clean-up (MVP): remove 4-connected components
+ * smaller than minAreaPx. Mutates mask in place.
+ * @returns {{removed: number, kept: number}}
+ */
+export function cleanupSmallComponents(mask, cols, rows, minAreaPx) {
+  const threshold = Math.max(1, Math.floor(minAreaPx));
+  const { labels, sizes } = labelComponents4(mask, cols, rows);
+  let removed = 0;
+  let kept = 0;
+  for (let i = 0; i < mask.length; i++) {
+    const lab = labels[i];
+    if (lab < 0) continue;
+    if (sizes[lab] < threshold) {
+      mask[i] = 0;
+      removed++;
+    } else {
+      kept++;
+    }
+  }
+  return { removed, kept };
+}
+
+/**
+ * Morphological erode of a binary mask with a circular SE (4-connected disk
+ * approximated by square for speed at small radii; radius 0 is identity).
+ * @returns {Uint8Array} new mask
+ */
+export function erodeMask(mask, cols, rows, radiusPx) {
+  if (radiusPx <= 0) return mask.slice();
+  const r = Math.ceil(radiusPx);
+  const out = new Uint8Array(mask.length);
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      if (!mask[j * cols + i]) continue;
+      let inside = true;
+      for (let dj = -r; dj <= r && inside; dj++) {
+        for (let di = -r; di <= r; di++) {
+          if (di * di + dj * dj > radiusPx * radiusPx) continue;
+          const ni = i + di, nj = j + dj;
+          if (ni < 0 || nj < 0 || ni >= cols || nj >= rows || !mask[nj * cols + ni]) {
+            inside = false;
+            break;
+          }
+        }
+      }
+      if (inside) out[j * cols + i] = 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Morphological dilate of a binary mask with a circular SE.
+ * @returns {Uint8Array} new mask
+ */
+export function dilateMask(mask, cols, rows, radiusPx) {
+  if (radiusPx <= 0) return mask.slice();
+  const r = Math.ceil(radiusPx);
+  const out = new Uint8Array(mask.length);
+  const r2 = radiusPx * radiusPx;
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      if (!mask[j * cols + i]) continue;
+      for (let dj = -r; dj <= r; dj++) {
+        for (let di = -r; di <= r; di++) {
+          if (di * di + dj * dj > r2) continue;
+          const ni = i + di, nj = j + dj;
+          if (ni >= 0 && nj >= 0 && ni < cols && nj < rows) out[nj * cols + ni] = 1;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Crop a mask by an axis-aligned pixel rect (Eclipse Crop Structure MVP).
+ * Normalizes the two corners so any drag direction works.
+ * @param {Uint8Array} mask - mutated in place
+ * @param {{x0:number,y0:number,x1:number,y1:number}} rect - continuous image pixels
+ * @param {'keepInside'|'keepOutside'} mode
+ * @returns {number} voxels cleared
+ */
+export function cropMask(mask, cols, rows, rect, mode = 'keepInside') {
+  const xa = Math.max(0, Math.floor(Math.min(rect.x0, rect.x1)));
+  const xb = Math.min(cols - 1, Math.ceil(Math.max(rect.x0, rect.x1)));
+  const ya = Math.max(0, Math.floor(Math.min(rect.y0, rect.y1)));
+  const yb = Math.min(rows - 1, Math.ceil(Math.max(rect.y0, rect.y1)));
+  let cleared = 0;
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const idx = j * cols + i;
+      if (!mask[idx]) continue;
+      const inBox = i >= xa && i <= xb && j >= ya && j <= yb;
+      const shouldClear = mode === 'keepInside' ? !inBox : inBox;
+      if (shouldClear) {
+        mask[idx] = 0;
+        cleared++;
+      }
+    }
+  }
+  return cleared;
+}
+
+/**
+ * Extract Wall (Eclipse): ring = dilate(source, outerPx) − erode(source, innerPx).
+ * Outer margin grows outward; inner margin hollows the interior.
+ * @returns {Uint8Array} new mask (does not mutate source)
+ */
+export function extractWallMask(mask, cols, rows, outerPx, innerPx) {
+  const outer = dilateMask(mask, cols, rows, outerPx);
+  const inner = erodeMask(mask, cols, rows, innerPx);
+  const wall = new Uint8Array(mask.length);
+  for (let i = 0; i < mask.length; i++) {
+    wall[i] = outer[i] && !inner[i] ? 1 : 0;
+  }
+  return wall;
+}
+
+/**
+ * Sample a 2D coronal mask (width=cols along x, height=numSlices along z)
+ * from the axial per-slice mask map of one segment.
+ * @param {Function} getSlice - (sliceIdx) => Uint8Array|null
+ */
+export function sampleCoronalMask(getSlice, numSlices, cols, rows, yIdx) {
+  const y = Math.max(0, Math.min(rows - 1, Math.round(yIdx)));
+  const out = new Uint8Array(cols * numSlices);
+  for (let k = 0; k < numSlices; k++) {
+    const src = getSlice(k);
+    if (!src) continue;
+    const off = y * cols;
+    for (let i = 0; i < cols; i++) out[k * cols + i] = src[off + i];
+  }
+  return out;
+}
+
+/**
+ * Sample a 2D sagittal mask (width=rows along y, height=numSlices along z).
+ */
+export function sampleSagittalMask(getSlice, numSlices, cols, rows, xIdx) {
+  const x = Math.max(0, Math.min(cols - 1, Math.round(xIdx)));
+  const out = new Uint8Array(rows * numSlices);
+  for (let k = 0; k < numSlices; k++) {
+    const src = getSlice(k);
+    if (!src) continue;
+    for (let j = 0; j < rows; j++) out[k * rows + j] = src[j * cols + x];
+  }
+  return out;
+}
+
+/**
+ * Stamp a circular brush on a CORONAL plane (y = yIdx) into the axial mask map.
+ * Plane coords: u = x column, v = slice index.
+ * @param {Function} getSlice - (sliceIdx) => Uint8Array
+ * @param {Function} setSlice - (sliceIdx, mask) => void  (optional if mutating in place)
+ */
+export function stampBrushCoronal(getSlice, setSlice, cols, rows, numSlices, yIdx, cu, cv, rPx, value) {
+  if (rPx <= 0) return 0;
+  const y = Math.max(0, Math.min(rows - 1, Math.round(yIdx)));
+  const r2 = rPx * rPx;
+  let n = 0;
+  const u0 = Math.max(0, Math.floor(cu - rPx));
+  const u1 = Math.min(cols - 1, Math.ceil(cu + rPx));
+  const v0 = Math.max(0, Math.floor(cv - rPx));
+  const v1 = Math.min(numSlices - 1, Math.ceil(cv + rPx));
+  for (let v = v0; v <= v1; v++) {
+    const mask = getSlice(v);
+    if (!mask) continue;
+    let touched = false;
+    for (let u = u0; u <= u1; u++) {
+      const du = u - cu;
+      const dv = v - cv;
+      if (du * du + dv * dv <= r2) {
+        const idx = y * cols + u;
+        if (mask[idx] !== value) n++;
+        mask[idx] = value;
+        touched = true;
+      }
+    }
+    if (touched && setSlice) setSlice(v, mask);
+  }
+  return n;
+}
+
+/**
+ * Stamp a circular brush on a SAGITTAL plane (x = xIdx).
+ * Plane coords: u = y row, v = slice index.
+ */
+export function stampBrushSagittal(getSlice, setSlice, cols, rows, numSlices, xIdx, cu, cv, rPx, value) {
+  if (rPx <= 0) return 0;
+  const x = Math.max(0, Math.min(cols - 1, Math.round(xIdx)));
+  const r2 = rPx * rPx;
+  let n = 0;
+  const u0 = Math.max(0, Math.floor(cu - rPx));
+  const u1 = Math.min(rows - 1, Math.ceil(cu + rPx));
+  const v0 = Math.max(0, Math.floor(cv - rPx));
+  const v1 = Math.min(numSlices - 1, Math.ceil(cv + rPx));
+  for (let v = v0; v <= v1; v++) {
+    const mask = getSlice(v);
+    if (!mask) continue;
+    let touched = false;
+    for (let u = u0; u <= u1; u++) {
+      const du = u - cu;
+      const dv = v - cv;
+      if (du * du + dv * dv <= r2) {
+        const idx = u * cols + x;
+        if (mask[idx] !== value) n++;
+        mask[idx] = value;
+        touched = true;
+      }
+    }
+    if (touched && setSlice) setSlice(v, mask);
+  }
+  return n;
+}
+
+/** Interpolate a brush stamp along a segment on the coronal plane. */
+export function stampLineCoronal(getSlice, setSlice, cols, rows, numSlices, yIdx, u0, v0, u1, v1, rPx, value) {
+  const dist = Math.hypot(u1 - u0, v1 - v0);
+  const steps = Math.max(1, Math.ceil(dist / Math.max(1, rPx / 2)));
+  for (let s = 0; s <= steps; s++) {
+    const t = s / steps;
+    stampBrushCoronal(getSlice, setSlice, cols, rows, numSlices, yIdx, u0 + (u1 - u0) * t, v0 + (v1 - v0) * t, rPx, value);
+  }
+}
+
+/** Interpolate a brush stamp along a segment on the sagittal plane. */
+export function stampLineSagittal(getSlice, setSlice, cols, rows, numSlices, xIdx, u0, v0, u1, v1, rPx, value) {
+  const dist = Math.hypot(u1 - u0, v1 - v0);
+  const steps = Math.max(1, Math.ceil(dist / Math.max(1, rPx / 2)));
+  for (let s = 0; s <= steps; s++) {
+    const t = s / steps;
+    stampBrushSagittal(getSlice, setSlice, cols, rows, numSlices, xIdx, u0 + (u1 - u0) * t, v0 + (v1 - v0) * t, rPx, value);
+  }
+}
+
+/**
+ * Apply a 2D plane mask change back into the axial slice map.
+ * planeMask is width×height (coronal: cols×numSlices, sagittal: rows×numSlices).
+ */
+export function writePlaneMaskCoronal(planeMask, getSlice, setSlice, cols, rows, numSlices, yIdx) {
+  const y = Math.max(0, Math.min(rows - 1, Math.round(yIdx)));
+  for (let k = 0; k < numSlices; k++) {
+    const mask = getSlice(k);
+    if (!mask) continue;
+    let touched = false;
+    for (let i = 0; i < cols; i++) {
+      const v = planeMask[k * cols + i] ? 1 : 0;
+      const idx = y * cols + i;
+      if (mask[idx] !== v) {
+        mask[idx] = v;
+        touched = true;
+      }
+    }
+    if (touched && setSlice) setSlice(k, mask);
+  }
+}
+
+export function writePlaneMaskSagittal(planeMask, getSlice, setSlice, cols, rows, numSlices, xIdx) {
+  const x = Math.max(0, Math.min(cols - 1, Math.round(xIdx)));
+  for (let k = 0; k < numSlices; k++) {
+    const mask = getSlice(k);
+    if (!mask) continue;
+    let touched = false;
+    for (let j = 0; j < rows; j++) {
+      const v = planeMask[k * rows + j] ? 1 : 0;
+      const idx = j * cols + x;
+      if (mask[idx] !== v) {
+        mask[idx] = v;
+        touched = true;
+      }
+    }
+    if (touched && setSlice) setSlice(k, mask);
+  }
+}
+
+/**
+ * Fill a rectangle on the CORONAL plane (writes through to axial masks).
+ * rect: {u0,v0,u1,v1} continuous plane pixels.
+ */
+export function fillRectCoronal(getSlice, setSlice, cols, rows, numSlices, yIdx, rect, value = 1) {
+  const y = Math.max(0, Math.min(rows - 1, Math.round(yIdx)));
+  const ua = Math.max(0, Math.floor(Math.min(rect.u0, rect.u1)));
+  const ub = Math.min(cols - 1, Math.ceil(Math.max(rect.u0, rect.u1)));
+  const va = Math.max(0, Math.floor(Math.min(rect.v0, rect.v1)));
+  const vb = Math.min(numSlices - 1, Math.ceil(Math.max(rect.v0, rect.v1)));
+  for (let k = va; k <= vb; k++) {
+    const mask = getSlice(k);
+    if (!mask) continue;
+    let touched = false;
+    for (let u = ua; u <= ub; u++) {
+      const idx = y * cols + u;
+      if (mask[idx] !== value) { mask[idx] = value; touched = true; }
+    }
+    if (touched && setSlice) setSlice(k, mask);
+  }
+}
+
+/** Fill a rectangle on the SAGITTAL plane. */
+export function fillRectSagittal(getSlice, setSlice, cols, rows, numSlices, xIdx, rect, value = 1) {
+  const x = Math.max(0, Math.min(cols - 1, Math.round(xIdx)));
+  const ua = Math.max(0, Math.floor(Math.min(rect.u0, rect.u1)));
+  const ub = Math.min(rows - 1, Math.ceil(Math.max(rect.u0, rect.u1)));
+  const va = Math.max(0, Math.floor(Math.min(rect.v0, rect.v1)));
+  const vb = Math.min(numSlices - 1, Math.ceil(Math.max(rect.v0, rect.v1)));
+  for (let k = va; k <= vb; k++) {
+    const mask = getSlice(k);
+    if (!mask) continue;
+    let touched = false;
+    for (let u = ua; u <= ub; u++) {
+      const idx = u * cols + x;
+      if (mask[idx] !== value) { mask[idx] = value; touched = true; }
+    }
+    if (touched && setSlice) setSlice(k, mask);
+  }
+}
+
+/**
+ * Crop on a plane: keepInside/keepOutside the rect, writing back to axial masks.
+ * For coronal, the crop applies only to voxels on planeCoord (that y column).
+ */
+export function cropCoronal(getSlice, setSlice, cols, rows, numSlices, yIdx, rect, mode = 'keepInside') {
+  const y = Math.max(0, Math.min(rows - 1, Math.round(yIdx)));
+  const ua = Math.max(0, Math.floor(Math.min(rect.u0, rect.u1)));
+  const ub = Math.min(cols - 1, Math.ceil(Math.max(rect.u0, rect.u1)));
+  const va = Math.max(0, Math.floor(Math.min(rect.v0, rect.v1)));
+  const vb = Math.min(numSlices - 1, Math.ceil(Math.max(rect.v0, rect.v1)));
+  let cleared = 0;
+  for (let k = 0; k < numSlices; k++) {
+    const mask = getSlice(k);
+    if (!mask) continue;
+    let touched = false;
+    for (let u = 0; u < cols; u++) {
+      const idx = y * cols + u;
+      if (!mask[idx]) continue;
+      const inBox = u >= ua && u <= ub && k >= va && k <= vb;
+      const shouldClear = mode === 'keepInside' ? !inBox : inBox;
+      if (shouldClear) { mask[idx] = 0; cleared++; touched = true; }
+    }
+    if (touched && setSlice) setSlice(k, mask);
+  }
+  return cleared;
+}
+
+export function cropSagittal(getSlice, setSlice, cols, rows, numSlices, xIdx, rect, mode = 'keepInside') {
+  const x = Math.max(0, Math.min(cols - 1, Math.round(xIdx)));
+  const ua = Math.max(0, Math.floor(Math.min(rect.u0, rect.u1)));
+  const ub = Math.min(rows - 1, Math.ceil(Math.max(rect.u0, rect.u1)));
+  const va = Math.max(0, Math.floor(Math.min(rect.v0, rect.v1)));
+  const vb = Math.min(numSlices - 1, Math.ceil(Math.max(rect.v0, rect.v1)));
+  let cleared = 0;
+  for (let k = 0; k < numSlices; k++) {
+    const mask = getSlice(k);
+    if (!mask) continue;
+    let touched = false;
+    for (let j = 0; j < rows; j++) {
+      const idx = j * cols + x;
+      if (!mask[idx]) continue;
+      const inBox = j >= ua && j <= ub && k >= va && k <= vb;
+      const shouldClear = mode === 'keepInside' ? !inBox : inBox;
+      if (shouldClear) { mask[idx] = 0; cleared++; touched = true; }
+    }
+    if (touched && setSlice) setSlice(k, mask);
+  }
+  return cleared;
+}
+
+/**
+ * Flood fill on a CORONAL plane from plane HU pixels, writing into axial masks.
+ * @param {Float32Array} planeHu - width=cols, height=numSlices
+ */
+export function floodFillCoronal(planeHu, getSlice, setSlice, cols, rows, numSlices, yIdx, su, sv, huTolerance, value = 1) {
+  const y = Math.max(0, Math.min(rows - 1, Math.round(yIdx)));
+  const planeMask = new Uint8Array(cols * numSlices);
+  const n = floodFillHU(planeHu, planeMask, cols, numSlices, Math.floor(su), Math.floor(sv), huTolerance, 1);
+  if (n === 0) return 0;
+  for (let k = 0; k < numSlices; k++) {
+    const mask = getSlice(k);
+    if (!mask) continue;
+    let touched = false;
+    for (let u = 0; u < cols; u++) {
+      if (!planeMask[k * cols + u]) continue;
+      const idx = y * cols + u;
+      if (mask[idx] !== value) { mask[idx] = value; touched = true; }
+    }
+    if (touched && setSlice) setSlice(k, mask);
+  }
+  return n;
+}
+
+/** Flood fill on a SAGITTAL plane (planeHu width=rows, height=numSlices). */
+export function floodFillSagittal(planeHu, getSlice, setSlice, cols, rows, numSlices, xIdx, su, sv, huTolerance, value = 1) {
+  const x = Math.max(0, Math.min(cols - 1, Math.round(xIdx)));
+  const planeMask = new Uint8Array(rows * numSlices);
+  const n = floodFillHU(planeHu, planeMask, rows, numSlices, Math.floor(su), Math.floor(sv), huTolerance, 1);
+  if (n === 0) return 0;
+  for (let k = 0; k < numSlices; k++) {
+    const mask = getSlice(k);
+    if (!mask) continue;
+    let touched = false;
+    for (let j = 0; j < rows; j++) {
+      if (!planeMask[k * rows + j]) continue;
+      const idx = j * cols + x;
+      if (mask[idx] !== value) { mask[idx] = value; touched = true; }
+    }
+    if (touched && setSlice) setSlice(k, mask);
+  }
+  return n;
+}

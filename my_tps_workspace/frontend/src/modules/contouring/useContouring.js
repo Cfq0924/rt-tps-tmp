@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import {
   maskToPolygons,
   polygonsToMask,
@@ -8,7 +8,19 @@ import {
   booleanOp,
   expandMask3D,
   autoBodyMask,
+  cleanupSmallComponents,
+  cropMask,
+  extractWallMask,
+  stampLineCoronal,
+  stampLineSagittal,
+  fillRectCoronal,
+  fillRectSagittal,
+  cropCoronal,
+  cropSagittal,
+  floodFillCoronal,
+  floodFillSagittal,
 } from './paintCore.js';
+import { findDictionaryEntry, inferTypeFromName } from './structureDictionary.js';
 
 /**
  * Contouring module state: segments, per-segment per-slice masks, undo/redo
@@ -29,6 +41,7 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
   const [activeSegmentId, setActiveSegmentId] = useState(null);
   const [tool, setTool] = useState('brush');
   const [brushSizeMm, setBrushSizeMm] = useState(5);
+  const [cropMode, setCropMode] = useState('keepInside');
   const [paintVersion, setPaintVersion] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -148,7 +161,14 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
           if (mask.some(v => v === 1)) sliceMap.set(idx, mask);
         }
         masksRef.current.set(meta.id, sliceMap);
-        nextSegments.push({ id: meta.id, name: meta.name, color: meta.color || '#5cc8ff', visible: true, approved: !!meta.approved });
+        nextSegments.push({
+          id: meta.id,
+          name: meta.name,
+          color: meta.color || '#5cc8ff',
+          visible: true,
+          approved: !!meta.approved,
+          interpretedType: meta.interpretedType || inferTypeFromName(meta.name),
+        });
       }
       setSegments(nextSegments);
       setActiveSegmentId(nextSegments[0]?.id ?? null);
@@ -162,26 +182,46 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
   }, [studyId, ctFiles, ctGeom, bump]);
 
   /** Create a segment (immediately persisted so Save can PUT contours). */
-  const addSegment = useCallback(async (name, color) => {
+  const addSegment = useCallback(async (name, color, interpretedType) => {
+    const body = { name, color };
+    if (interpretedType) body.interpretedType = interpretedType;
+    else {
+      const entry = findDictionaryEntry(name);
+      if (entry) body.interpretedType = entry.type;
+      else body.interpretedType = inferTypeFromName(name);
+    }
     const res = await fetch(`/api/segmentations/study/${studyId}`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, color }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error('Failed to create segmentation');
     const { segmentation } = await res.json();
     masksRef.current.set(segmentation.id, new Map());
-    setSegments(prev => [...prev, { id: segmentation.id, name: segmentation.name, color: segmentation.color || color, visible: true }]);
+    setSegments(prev => [...prev, {
+      id: segmentation.id,
+      name: segmentation.name,
+      color: segmentation.color || color,
+      visible: true,
+      interpretedType: segmentation.interpretedType || body.interpretedType,
+    }]);
     setActiveSegmentId(segmentation.id);
     return segmentation.id;
   }, [studyId]);
 
+  /** Add a segment from the structure dictionary (name + type + color). */
+  const addSegmentFromDictionary = useCallback(async (entryName) => {
+    const entry = findDictionaryEntry(entryName);
+    if (!entry) throw new Error(`Unknown dictionary entry: ${entryName}`);
+    return addSegment(entry.name, entry.color, entry.type);
+  }, [addSegment]);
+
   const updateSegment = useCallback((id, patch) => {
     setSegments(prev => prev.map(s => (s.id === id ? { ...s, ...patch } : s)));
     setDirty(true);
-    // persist rename/recolor/approval immediately (cheap PATCH)
-    if (patch.name !== undefined || patch.color !== undefined || patch.approved !== undefined) {
+    // persist rename/recolor/approval/type immediately (cheap PATCH)
+    if (patch.name !== undefined || patch.color !== undefined || patch.approved !== undefined || patch.interpretedType !== undefined) {
       fetch(`/api/segmentations/${id}`, {
         method: 'PATCH',
         credentials: 'include',
@@ -326,18 +366,258 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     strokeEnd();
   }, [activeSegmentId, ctGeom, getMask, strokeStart, strokeEnd]);
 
+  /** Snapshot every existing slice of the active segment (composite undo). */
+  const snapshotActiveAllSlices = useCallback(() => {
+    if (activeSegmentId == null || !ctGeom) return null;
+    const sliceMap = masksRef.current.get(activeSegmentId);
+    if (!sliceMap) return { segId: activeSegmentId, group: [] };
+    const group = [];
+    for (const [sliceIdx, mask] of sliceMap) {
+      group.push({ sliceIdx, data: mask.slice() });
+    }
+    const h = historyRef.current;
+    h.past.push({ segId: activeSegmentId, group });
+    if (h.past.length > 20) h.past.shift();
+    h.future.length = 0;
+    refreshHistoryInfo();
+    return { segId: activeSegmentId, group };
+  }, [activeSegmentId, ctGeom, refreshHistoryInfo]);
+
+  /**
+   * Eclipse Clean-up: drop small 4-connected fragments on every painted slice
+   * of the active segment. minAreaMm2 is converted via pixel spacing.
+   */
+  const cleanupActive = useCallback((minAreaMm2) => {
+    const seg = activeSegment();
+    if (!seg || seg.approved || !ctGeom) return { removed: 0, kept: 0 };
+    const spacingI = ctGeom.pixelSpacing?.i || 1;
+    const spacingJ = ctGeom.pixelSpacing?.j || 1;
+    const minAreaPx = Math.max(1, (minAreaMm2 || 4) / (spacingI * spacingJ));
+    snapshotActiveAllSlices();
+    const sliceMap = masksRef.current.get(activeSegmentId);
+    let removed = 0, kept = 0;
+    if (sliceMap) {
+      for (const [, mask] of sliceMap) {
+        const stats = cleanupSmallComponents(mask, ctGeom.cols, ctGeom.rows, minAreaPx);
+        removed += stats.removed;
+        kept += stats.kept;
+      }
+    }
+    setDirty(true);
+    bump();
+    refreshHistoryInfo();
+    return { removed, kept };
+  }, [activeSegmentId, activeSegment, ctGeom, snapshotActiveAllSlices, bump, refreshHistoryInfo]);
+
+  /**
+   * Eclipse Crop Structure (current slice): keepInside | keepOutside a pixel rect.
+   */
+  const cropActiveOnSlice = useCallback((sliceIdx, rect, mode = 'keepInside') => {
+    const seg = activeSegment();
+    if (!seg || seg.approved || !ctGeom) return 0;
+    strokeStart(sliceIdx);
+    const mask = getMask(seg.id, sliceIdx);
+    const cleared = cropMask(mask, ctGeom.cols, ctGeom.rows, rect, mode);
+    strokeEnd();
+    return cleared;
+  }, [activeSegmentId, activeSegment, ctGeom, getMask, strokeStart, strokeEnd]);
+
+  /**
+   * Crop every painted slice of the active segment using the same image-pixel
+   * rect (useful when the crop box is defined once and applied volume-wide).
+   */
+  const cropActiveAllSlices = useCallback((rect, mode = 'keepInside') => {
+    const seg = activeSegment();
+    if (!seg || seg.approved || !ctGeom) return 0;
+    snapshotActiveAllSlices();
+    const sliceMap = masksRef.current.get(activeSegmentId);
+    let cleared = 0;
+    if (sliceMap) {
+      for (const [, mask] of sliceMap) {
+        cleared += cropMask(mask, ctGeom.cols, ctGeom.rows, rect, mode);
+      }
+    }
+    setDirty(true);
+    bump();
+    refreshHistoryInfo();
+    return cleared;
+  }, [activeSegmentId, activeSegment, ctGeom, snapshotActiveAllSlices, bump, refreshHistoryInfo]);
+
+  /**
+   * Eclipse Extract Wall: create a NEW segment that is a ring around the
+   * active structure (outer dilate − inner erode), across all painted slices.
+   */
+  const extractWallFromActive = useCallback(async (outerMm, innerMm, newColor) => {
+    const seg = activeSegment();
+    if (!seg || seg.approved || !ctGeom) return null;
+    const spacing = ctGeom.pixelSpacing?.j || 1;
+    const outerPx = Math.max(0, (outerMm || 2) / spacing);
+    const innerPx = Math.max(0, (innerMm || 2) / spacing);
+    const sliceMap = masksRef.current.get(activeSegmentId);
+    if (!sliceMap || sliceMap.size === 0) return null;
+
+    // Build wall masks first (no mutation of the source), then create the segment
+    const wallSlices = new Map();
+    for (const [sliceIdx, mask] of sliceMap) {
+      const wall = extractWallMask(mask, ctGeom.cols, ctGeom.rows, outerPx, innerPx);
+      if (wall.some(v => v === 1)) wallSlices.set(sliceIdx, wall);
+    }
+    if (wallSlices.size === 0) return null;
+
+    const wallName = `${seg.name}_Wall`;
+    const color = newColor || seg.color;
+    const newId = await addSegment(wallName, color, 'AVOIDANCE');
+    const dstMap = masksRef.current.get(newId);
+    if (dstMap) {
+      for (const [sliceIdx, wall] of wallSlices) dstMap.set(sliceIdx, wall);
+    }
+    setDirty(true);
+    bump();
+    return newId;
+  }, [activeSegmentId, activeSegment, ctGeom, addSegment, bump]);
+
+  /**
+   * Multi-plane brush stroke (Eclipse multi-plane contouring MVP).
+   * Writes into the axial per-slice mask map so save/export stay unchanged.
+   *
+   * @param {'coronal'|'sagittal'} orientation
+   * @param {number} planeCoord - yIdx for coronal, xIdx for sagittal
+   * @param {{u0,v0,u1,v1}} line - plane pixel coords (u = in-plane column, v = slice)
+   * @param {number} brushSizeMm
+   * @param {0|1} value
+   */
+  const paintOnPlane = useCallback((orientation, planeCoord, line, brushSizeMm, value = 1) => {
+    const seg = activeSegment();
+    if (!seg || seg.approved || !ctGeom) return;
+    const numSlices = ctFiles.length;
+    if (numSlices === 0) return;
+    const spacing = ctGeom.pixelSpacing?.j || 1;
+    const rPx = Math.max(1, (brushSizeMm / 2) / spacing);
+    const sliceMap = masksRef.current.get(activeSegmentId);
+    if (!sliceMap) return;
+
+    // one composite undo covering every slice this stroke may touch
+    const vLo = Math.max(0, Math.floor(Math.min(line.v0, line.v1) - rPx - 1));
+    const vHi = Math.min(numSlices - 1, Math.ceil(Math.max(line.v0, line.v1) + rPx + 1));
+    const group = [];
+    for (let s = vLo; s <= vHi; s++) {
+      if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
+      group.push({ sliceIdx: s, data: sliceMap.get(s).slice() });
+    }
+    const h = historyRef.current;
+    h.past.push({ segId: activeSegmentId, group });
+    if (h.past.length > 20) h.past.shift();
+    h.future.length = 0;
+
+    const getSlice = (s) => {
+      if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
+      return sliceMap.get(s);
+    };
+    const setSlice = (s, m) => sliceMap.set(s, m);
+
+    if (orientation === 'coronal') {
+      stampLineCoronal(getSlice, setSlice, ctGeom.cols, ctGeom.rows, numSlices,
+        planeCoord, line.u0, line.v0, line.u1, line.v1, rPx, value);
+    } else {
+      stampLineSagittal(getSlice, setSlice, ctGeom.cols, ctGeom.rows, numSlices,
+        planeCoord, line.u0, line.v0, line.u1, line.v1, rPx, value);
+    }
+    setDirty(true);
+    bump();
+    refreshHistoryInfo();
+  }, [activeSegmentId, activeSegment, ctGeom, ctFiles, bump, refreshHistoryInfo]);
+
+  /** Shared helper: snapshot slices spanned by a plane stroke (v range). */
+  const withPlaneUndo = useCallback((vLo, vHi, fn) => {
+    const seg = activeSegment();
+    if (!seg || seg.approved || !ctGeom) return null;
+    const sliceMap = masksRef.current.get(activeSegmentId);
+    if (!sliceMap) return null;
+    const numSlices = ctFiles.length;
+    const lo = Math.max(0, Math.floor(vLo));
+    const hi = Math.min(numSlices - 1, Math.ceil(vHi));
+    const group = [];
+    for (let s = lo; s <= hi; s++) {
+      if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
+      group.push({ sliceIdx: s, data: sliceMap.get(s).slice() });
+    }
+    const h = historyRef.current;
+    h.past.push({ segId: activeSegmentId, group });
+    if (h.past.length > 20) h.past.shift();
+    h.future.length = 0;
+
+    const getSlice = (k) => {
+      if (!sliceMap.has(k)) sliceMap.set(k, new Uint8Array(ctGeom.cols * ctGeom.rows));
+      return sliceMap.get(k);
+    };
+    const setSlice = (k, m) => sliceMap.set(k, m);
+    const result = fn(getSlice, setSlice);
+    setDirty(true);
+    bump();
+    refreshHistoryInfo();
+    return result;
+  }, [activeSegmentId, activeSegment, ctGeom, ctFiles, bump, refreshHistoryInfo]);
+
+  /** Rectangle fill on a multi-plane (coronal/sagittal). */
+  const fillRectOnPlane = useCallback((orientation, planeCoord, rect, value = 1) => {
+    if (!ctGeom) return;
+    const numSlices = ctFiles.length;
+    const vLo = Math.min(rect.v0, rect.v1);
+    const vHi = Math.max(rect.v0, rect.v1);
+    return withPlaneUndo(vLo - 1, vHi + 1, (getSlice, setSlice) => {
+      if (orientation === 'coronal') {
+        fillRectCoronal(getSlice, setSlice, ctGeom.cols, ctGeom.rows, numSlices, planeCoord, rect, value);
+      } else {
+        fillRectSagittal(getSlice, setSlice, ctGeom.cols, ctGeom.rows, numSlices, planeCoord, rect, value);
+      }
+    });
+  }, [ctGeom, ctFiles, withPlaneUndo]);
+
+  /** Crop keepInside/keepOutside a rect on a multi-plane (affects that plane column only). */
+  const cropOnPlane = useCallback((orientation, planeCoord, rect, mode = 'keepInside') => {
+    if (!ctGeom) return 0;
+    const numSlices = ctFiles.length;
+    return withPlaneUndo(0, numSlices - 1, (getSlice, setSlice) => {
+      if (orientation === 'coronal') {
+        return cropCoronal(getSlice, setSlice, ctGeom.cols, ctGeom.rows, numSlices, planeCoord, rect, mode);
+      }
+      return cropSagittal(getSlice, setSlice, ctGeom.cols, ctGeom.rows, numSlices, planeCoord, rect, mode);
+    }) ?? 0;
+  }, [ctGeom, ctFiles, withPlaneUndo]);
+
+  /**
+   * HU flood fill on a multi-plane.
+   * @param {Float32Array} planeHu - plane HU pixels (coronal cols×numSlices / sagittal rows×numSlices)
+   */
+  const floodFillOnPlane = useCallback((orientation, planeCoord, seed, planeHu, huTolerance = 50) => {
+    if (!ctGeom || !planeHu) return 0;
+    const numSlices = ctFiles.length;
+    // seed only touches nearby slices for undo; flood may span more — snapshot all
+    return withPlaneUndo(0, numSlices - 1, (getSlice, setSlice) => {
+      if (orientation === 'coronal') {
+        return floodFillCoronal(planeHu, getSlice, setSlice, ctGeom.cols, ctGeom.rows, numSlices,
+          planeCoord, seed.u, seed.v, huTolerance, 1);
+      }
+      return floodFillSagittal(planeHu, getSlice, setSlice, ctGeom.cols, ctGeom.rows, numSlices,
+        planeCoord, seed.u, seed.v, huTolerance, 1);
+    }) ?? 0;
+  }, [ctGeom, ctFiles, withPlaneUndo]);
+
   const activeSegmentApproved = !!(segments.find(s => s.id === activeSegmentId)?.approved);
 
   return {
     segments, activeSegmentId, setActiveSegmentId, activeSegmentApproved,
     masks: masksRef.current,
     tool, setTool, brushSizeMm, setBrushSizeMm,
+    cropMode, setCropMode,
     paintVersion, bump,
     dirty, saving, loading, loadError,
     canUndo: historyInfo.canUndo, canRedo: historyInfo.canRedo,
     strokeStart, strokeEnd, undo, redo,
     floodFillAt, applyBoolean, expandActive, autoBodyOnSlice,
-    addSegment, updateSegment, deleteSegment, save,
+    cleanupActive, cropActiveOnSlice, cropActiveAllSlices, extractWallFromActive,
+    paintOnPlane, fillRectOnPlane, cropOnPlane, floodFillOnPlane,
+    addSegment, addSegmentFromDictionary, updateSegment, deleteSegment, save,
     loadFromServer, getMask,
   };
 }

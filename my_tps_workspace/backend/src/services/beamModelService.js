@@ -156,6 +156,35 @@ export function deleteSubfield({ beamId, subfieldId, userId, reqId }) {
   return { ok: true };
 }
 
+/** Update a subfield's name / weight / MLC (FiF editor). */
+export function updateSubfield({ beamId, subfieldId, name, weight, mlc, userId, reqId }) {
+  const db = getDb();
+  beamRow(db, beamId);
+  const existing = db.prepare('SELECT id FROM beam_subfields WHERE beam_id = ? AND id = ?').get(beamId, subfieldId);
+  if (!existing) {
+    throw Object.assign(new Error('Subfield not found'), { status: 404 });
+  }
+  if (name !== undefined) {
+    if (!String(name).trim()) throw Object.assign(new Error('name cannot be empty'), { status: 400 });
+    db.prepare('UPDATE beam_subfields SET name = ? WHERE id = ?').run(String(name).trim(), subfieldId);
+  }
+  if (weight !== undefined) {
+    if (!Number.isFinite(Number(weight)) || Number(weight) < 0) {
+      throw Object.assign(new Error('weight must be a non-negative number'), { status: 400 });
+    }
+    db.prepare('UPDATE beam_subfields SET weight = ? WHERE id = ?').run(Number(weight), subfieldId);
+  }
+  if (mlc !== undefined) {
+    db.prepare('UPDATE beam_subfields SET mlc_json = ? WHERE id = ?')
+      .run(mlc ? JSON.stringify(mlc) : null, subfieldId);
+  }
+  auditLog(db, { reqId, userId, action: 'update_beam_subfield', resourceType: 'ebrt_beam', resourceId: beamId, metadata: { subfieldId } });
+  const row = db.prepare(`
+    SELECT id, beam_id as beamId, name, weight, mlc_json as mlcJson FROM beam_subfields WHERE id = ?
+  `).get(subfieldId);
+  return { ...row, mlc: row.mlcJson ? JSON.parse(row.mlcJson) : null, mlcJson: undefined };
+}
+
 // ---------- opposing field helper ----------
 
 /** Normalize an angle into (−180, 180]. */

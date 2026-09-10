@@ -29,11 +29,12 @@ router.get('/study/:studyId', authMiddleware, (req, res, next) => {
 // POST /api/segmentations/study/:studyId — create a segmentation
 router.post('/study/:studyId', authMiddleware, (req, res, next) => {
   try {
-    const { name, color } = req.body;
+    const { name, color, interpretedType } = req.body;
     const row = createSegmentation({
       studyId: parseInt(req.params.studyId, 10),
       name,
       color,
+      interpretedType,
       userId: req.user.userId,
       reqId: req.id,
     });
@@ -57,15 +58,16 @@ router.get('/:id', authMiddleware, (req, res, next) => {
   }
 });
 
-// PATCH /api/segmentations/:id — rename / recolor / approve
+// PATCH /api/segmentations/:id — rename / recolor / approve / interpreted type
 router.patch('/:id', authMiddleware, (req, res, next) => {
   try {
-    const { name, color, approved } = req.body;
+    const { name, color, approved, interpretedType } = req.body;
     const row = updateSegmentationMeta({
       id: parseInt(req.params.id, 10),
       name,
       color,
       approved,
+      interpretedType,
       userId: req.user.userId,
       reqId: req.id,
     });

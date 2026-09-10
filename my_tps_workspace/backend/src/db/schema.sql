@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS segmentations (
   name TEXT NOT NULL,
   color TEXT,
   approved INTEGER NOT NULL DEFAULT 0,
+  interpreted_type TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -19,6 +19,12 @@ import {
   keepLargestComponent,
   autoBodyMask,
   imageToHU,
+  labelComponents4,
+  cleanupSmallComponents,
+  dilateMask,
+  erodeMask,
+  cropMask,
+  extractWallMask,
 } from './paintCore.js';
 
 const COLS = 20;
@@ -318,5 +324,112 @@ describe('imageToHU', () => {
   it('handles fractional slope', () => {
     const img = { getPixelData: () => new Uint16Array([100]), slope: 0.5, intercept: -1024 };
     expect(imageToHU(img)[0]).toBeCloseTo(-974);
+  });
+});
+
+describe('labelComponents4 / cleanupSmallComponents', () => {
+  it('labels two separate blobs', () => {
+    const mask = new Uint8Array(100);
+    [0, 1].forEach(i => mask[i] = 1);
+    [55, 56, 57].forEach(i => mask[i] = 1);
+    const { sizes } = labelComponents4(mask, 10, 10);
+    expect(sizes.sort((a, b) => a - b)).toEqual([2, 3]);
+  });
+
+  it('removes components smaller than minAreaPx', () => {
+    const mask = new Uint8Array(100);
+    [0, 1].forEach(i => mask[i] = 1); // 2-voxel speck
+    [55, 56, 57, 65, 66, 67].forEach(i => mask[i] = 1); // 6-voxel keep
+    const stats = cleanupSmallComponents(mask, 10, 10, 4);
+    expect(stats.removed).toBe(2);
+    expect(stats.kept).toBe(6);
+    expect(mask[0]).toBe(0);
+    expect(mask[55]).toBe(1);
+  });
+});
+
+describe('dilateMask / erodeMask', () => {
+  it('dilate grows a single voxel into a diamond-ish disk', () => {
+    const mask = new Uint8Array(25);
+    mask[12] = 1; // (2,2)
+    const out = dilateMask(mask, 5, 5, 1);
+    expect(out[12]).toBe(1);
+    expect(out[7]).toBe(1);  // (2,1)
+    expect(out[17]).toBe(1); // (2,3)
+    expect(out[11]).toBe(1); // (1,2)
+    expect(out[13]).toBe(1); // (3,2)
+    expect(out[0]).toBe(0);
+  });
+
+  it('erode shrinks a thick blob and empties a thin line', () => {
+    const thick = new Uint8Array(100);
+    for (let j = 3; j <= 6; j++) for (let i = 3; i <= 6; i++) thick[j * 10 + i] = 1;
+    const eroded = erodeMask(thick, 10, 10, 1);
+    expect(eroded[5 * 10 + 5]).toBe(1); // center survives
+    expect(eroded[3 * 10 + 5]).toBe(0); // border gone
+
+    const line = new Uint8Array(100);
+    for (let i = 2; i <= 7; i++) line[5 * 10 + i] = 1;
+    const lineE = erodeMask(line, 10, 10, 1);
+    expect(lineE.some(v => v === 1)).toBe(false);
+  });
+
+  it('radius 0 is identity', () => {
+    const mask = new Uint8Array([1, 0, 1]);
+    expect([...erodeMask(mask, 3, 1, 0)]).toEqual([1, 0, 1]);
+    expect([...dilateMask(mask, 3, 1, 0)]).toEqual([1, 0, 1]);
+  });
+});
+
+describe('cropMask', () => {
+  it('keepInside clears voxels outside the rect', () => {
+    const mask = new Uint8Array(100).fill(1);
+    const cleared = cropMask(mask, 10, 10, { x0: 2, y0: 2, x1: 7, y1: 7 }, 'keepInside');
+    expect(mask[5 * 10 + 5]).toBe(1);
+    expect(mask[0]).toBe(0);
+    expect(mask[9 * 10 + 9]).toBe(0);
+    expect(cleared).toBe(100 - 36);
+  });
+
+  it('keepOutside clears voxels inside the rect', () => {
+    const mask = new Uint8Array(100).fill(1);
+    cropMask(mask, 10, 10, { x0: 2, y0: 2, x1: 7, y1: 7 }, 'keepOutside');
+    expect(mask[5 * 10 + 5]).toBe(0);
+    expect(mask[0]).toBe(1);
+  });
+
+  it('normalizes reversed corners', () => {
+    const mask = new Uint8Array(100).fill(1);
+    cropMask(mask, 10, 10, { x0: 7, y0: 7, x1: 2, y1: 2 }, 'keepInside');
+    expect(mask[5 * 10 + 5]).toBe(1);
+    expect(mask[0]).toBe(0);
+  });
+});
+
+describe('extractWallMask', () => {
+  it('creates a ring: outer dilate minus inner erode', () => {
+    const mask = new Uint8Array(100);
+    for (let j = 4; j <= 5; j++) for (let i = 4; i <= 5; i++) mask[j * 10 + i] = 1;
+    // 2×2 erode(r=1) is empty → wall collapses to the dilated outer shell
+    const wall = extractWallMask(mask, 10, 10, 1, 1);
+    expect(wall[5 * 10 + 5]).toBe(1); // original core still in dilate
+    expect(wall[3 * 10 + 5]).toBe(1); // outer rim
+    expect(wall[0]).toBe(0);
+  });
+
+  it('hollows a solid disk when inner radius is large enough', () => {
+    const cols = 15, rows = 15;
+    const mask = new Uint8Array(cols * rows);
+    for (let j = 3; j <= 11; j++) {
+      for (let i = 3; i <= 11; i++) {
+        const dx = i - 7, dy = j - 7;
+        if (dx * dx + dy * dy <= 16) mask[j * cols + i] = 1;
+      }
+    }
+    const wall = extractWallMask(mask, cols, rows, 1, 3);
+    // center should be hollow
+    expect(wall[7 * cols + 7]).toBe(0);
+    // rim should remain
+    expect(wall[7 * cols + 3]).toBe(1);
   });
 });

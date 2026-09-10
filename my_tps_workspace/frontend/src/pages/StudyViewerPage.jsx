@@ -27,6 +27,7 @@ import RegistrationOverlay from '../modules/registration/RegistrationOverlay.jsx
 import RegistrationPanel from '../modules/registration/RegistrationPanel.jsx';
 import PlanSums from '../modules/doseSum/PlanSums.jsx';
 import MPRView from '../modules/mpr/MPRView.jsx';
+import MPRContourLayer from '../modules/mpr/MPRContourLayer.jsx';
 import { loadVolume } from '../lib/mprVolume.js';
 import EbrtLeftTree from '../modules/ebrt/EbrtLeftTree.jsx';
 import EbrtInfoTabs from '../modules/ebrt/EbrtInfoTabs.jsx';
@@ -418,7 +419,10 @@ export default function StudyViewerPage() {
   }, [filesForModality, currentImageIndex]);
 
   // MPR column active: enabled + CT + images module (v1 scope)
-  const mprActive = mprEnabled && activeModality === 'CT' && activeModule === 'images';
+  const mprActive = mprEnabled && activeModality === 'CT'
+    && (activeModule === 'images' || activeModule === 'contouring');
+  const mprPaintActive = mprActive && activeModule === 'contouring'
+    && ['brush', 'eraser', 'floodfill', 'rect', 'crop'].includes(contouring.tool);
 
   const prescriptionCgy = (() => {
     if (ebrt.selectedPlan?.prescriptionDoseGy != null) {
@@ -955,6 +959,8 @@ export default function StudyViewerPage() {
               onStrokeStart={contouring.strokeStart}
               onStrokeEnd={contouring.strokeEnd}
               onFloodFill={(sliceIdx, si, sj, ctPixels) => contouring.floodFillAt(sliceIdx, { i: si, j: sj }, 50, ctPixels)}
+              cropMode={contouring.cropMode}
+              onCrop={(sliceIdx, rect, mode) => contouring.cropActiveOnSlice(sliceIdx, rect, mode)}
             />
           )}
 
@@ -1099,6 +1105,30 @@ export default function StudyViewerPage() {
                 masterViewport={viewportInstance}
                 iso={mprIso}
               />
+              {mprState.geom && (
+                <MPRContourLayer
+                  orientation="coronal"
+                  geom={mprState.geom}
+                  volume={mprState.volume}
+                  masterViewport={viewportInstance}
+                  iso={mprIso}
+                  planeCoord={crosshair.yIdx}
+                  sliceIdx={currentImageIndex}
+                  segments={contouring.segments}
+                  masks={contouring.masks}
+                  paintVersion={contouring.paintVersion}
+                  paintEnabled={mprPaintActive}
+                  tool={contouring.tool}
+                  brushSizeMm={contouring.brushSizeMm}
+                  cropMode={contouring.cropMode}
+                  activeSegmentId={contouring.activeSegmentId}
+                  activeSegmentApproved={contouring.activeSegmentApproved}
+                  onPaintPlane={contouring.paintOnPlane}
+                  onFillRectPlane={contouring.fillRectOnPlane}
+                  onCropPlane={contouring.cropOnPlane}
+                  onFloodFillPlane={contouring.floodFillOnPlane}
+                />
+              )}
             </Box>
             <Box sx={{ flex: 1, position: 'relative' }}>
               <MPRView
@@ -1122,10 +1152,33 @@ export default function StudyViewerPage() {
                 masterViewport={viewportInstance}
                 iso={mprIso}
               />
+              {mprState.geom && (
+                <MPRContourLayer
+                  orientation="sagittal"
+                  geom={mprState.geom}
+                  volume={mprState.volume}
+                  masterViewport={viewportInstance}
+                  iso={mprIso}
+                  planeCoord={crosshair.xIdx}
+                  sliceIdx={currentImageIndex}
+                  segments={contouring.segments}
+                  masks={contouring.masks}
+                  paintVersion={contouring.paintVersion}
+                  paintEnabled={mprPaintActive}
+                  tool={contouring.tool}
+                  brushSizeMm={contouring.brushSizeMm}
+                  cropMode={contouring.cropMode}
+                  activeSegmentId={contouring.activeSegmentId}
+                  activeSegmentApproved={contouring.activeSegmentApproved}
+                  onPaintPlane={contouring.paintOnPlane}
+                  onFillRectPlane={contouring.fillRectOnPlane}
+                  onCropPlane={contouring.cropOnPlane}
+                  onFloodFillPlane={contouring.floodFillOnPlane}
+                />
+              )}
             </Box>
           </Box>
         )}
-        </Box>
 
         {/* Right sidebar - per-module panels */}
         <Box
@@ -1232,5 +1285,6 @@ export default function StudyViewerPage() {
         </Box>
       </Box>
     </Box>
+  </Box>
   );
 }

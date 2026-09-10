@@ -188,6 +188,98 @@ export function useEbrtPlans({ studyId, enabled }) {
     return plan;
   }, [studyId, refreshList]);
 
+  // ---------- EBRT backend wiring (PLAN-EBRT-BACKEND B2–B6) ----------
+
+  const postJson = useCallback(async (url, body, method = 'POST') => {
+    const res = await fetch(url, {
+      method,
+      credentials: 'include',
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || `${method} ${url} failed`);
+    }
+    return res.json();
+  }, []);
+
+  /** Eclipse Plan Normalization — rescale the plan's dose grid. */
+  const normalizePlan = useCallback(async (planId, mode, value) => {
+    const data = await postJson(`/api/ebrt-normalize/plans/${planId}/normalize`, { mode, value });
+    await selectPlan(planId);
+    return data;
+  }, [postJson, selectPlan]);
+
+  /** Create the 180° opposing field from a source beam number. */
+  const addOpposingField = useCallback(async (planId, sourceBeamNumber, name) => {
+    const data = await postJson(`/api/ebrt/plans/${planId}/opposing-field`, { sourceBeamNumber, name });
+    const res = await fetch(`/api/ebrt/plans/${planId}`, { credentials: 'include' });
+    if (res.ok) {
+      const { plan } = await res.json();
+      setPlans(prev => prev.map(p => (p.id === plan.id ? plan : p)));
+    }
+    return data.beam ?? data;
+  }, [postJson]);
+
+  const listSubfields = useCallback(async (beamId) => {
+    const data = await postJson(`/api/ebrt/beams/${beamId}/subfields`, undefined, 'GET');
+    return data.subfields ?? [];
+  }, [postJson]);
+
+  const addSubfield = useCallback(async (beamId, payload) => {
+    return postJson(`/api/ebrt/beams/${beamId}/subfields`, payload);
+  }, [postJson]);
+
+  const removeSubfield = useCallback(async (beamId, subfieldId) => {
+    return postJson(`/api/ebrt/beams/${beamId}/subfields/${subfieldId}`, undefined, 'DELETE');
+  }, [postJson]);
+
+  const updateSubfield = useCallback(async (beamId, subfieldId, patch) => {
+    return postJson(`/api/ebrt/beams/${beamId}/subfields/${subfieldId}`, patch, 'PATCH');
+  }, [postJson]);
+
+  const getControlPoints = useCallback(async (beamId) => {
+    const data = await postJson(`/api/ebrt/beams/${beamId}/control-points`, undefined, 'GET');
+    return data.controlPoints ?? [];
+  }, [postJson]);
+
+  /** Replace all control points of a beam (PUT). */
+  const saveControlPoints = useCallback(async (beamId, controlPoints) => {
+    return postJson(`/api/ebrt/beams/${beamId}/control-points`, { controlPoints }, 'PUT');
+  }, [postJson]);
+
+  /** Generate couch structure into the study's segmentations. */
+  const addCouchStructure = useCallback(async (payload = {}) => {
+    return postJson(`/api/ebrt/studies/${studyId}/couch-structure`, payload);
+  }, [postJson, studyId]);
+
+  const getApprovalChecks = useCallback(async (planId) => {
+    const data = await postJson(`/api/ebrt/plans/${planId}/approval-checks`, undefined, 'GET');
+    return data.checks ?? data;
+  }, [postJson]);
+
+  const listRevisions = useCallback(async (planId) => {
+    const data = await postJson(`/api/ebrt/plans/${planId}/revisions`, undefined, 'GET');
+    return data.revisions ?? [];
+  }, [postJson]);
+
+  const captureRevision = useCallback(async (planId, note) => {
+    return postJson(`/api/ebrt/plans/${planId}/revisions`, note ? { note } : {});
+  }, [postJson]);
+
+  const rollbackRevision = useCallback(async (planId, revisionNo) => {
+    const data = await postJson(`/api/ebrt/plans/${planId}/revisions/rollback`, { revisionNo });
+    await refreshList();
+    await selectPlan(planId);
+    return data;
+  }, [postJson, refreshList, selectPlan]);
+
+  const getPointDoses = useCallback(async (planId) => {
+    const data = await postJson(`/api/ebrt/plans/${planId}/point-doses`, undefined, 'GET');
+    return data.pointDoses ?? data.points ?? [];
+  }, [postJson]);
+
   return {
     plans, templates, selectedPlan, selectedPlanId, setSelectedPlanId, selectPlan,
     loading, error,
@@ -195,6 +287,12 @@ export function useEbrtPlans({ studyId, enabled }) {
     addBeam, updateBeam, deleteBeam,
     refreshTemplates, saveAsTemplate, instantiateTemplate,
     refreshList,
+    // backend wiring
+    normalizePlan, addOpposingField,
+    listSubfields, addSubfield, removeSubfield, updateSubfield,
+    getControlPoints, saveControlPoints, addCouchStructure,
+    getApprovalChecks, listRevisions, captureRevision, rollbackRevision,
+    getPointDoses,
   };
 }
 

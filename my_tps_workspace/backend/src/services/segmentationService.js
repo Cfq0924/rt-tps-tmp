@@ -58,7 +58,8 @@ export function validateSlicesPayload(slices) {
 export function listSegmentations({ studyId, userId, reqId }) {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT id, study_id as studyId, name, color, approved, created_at as createdAt,
+    SELECT id, study_id as studyId, name, color, approved,
+           interpreted_type as interpretedType, created_at as createdAt,
            (SELECT COUNT(*) FROM segmentation_slices s WHERE s.segmentation_id = segmentations.id) as sliceCount
     FROM segmentations
     WHERE study_id = ?
@@ -69,19 +70,20 @@ export function listSegmentations({ studyId, userId, reqId }) {
   return rows;
 }
 
-export function createSegmentation({ studyId, name, color, userId, reqId }) {
+export function createSegmentation({ studyId, name, color, interpretedType, userId, reqId }) {
   const db = getDb();
   if (!name || !String(name).trim()) {
     throw Object.assign(new Error('name is required'), { status: 400 });
   }
   const result = db.prepare(
-    'INSERT INTO segmentations (study_id, name, color) VALUES (?, ?, ?)'
-  ).run(studyId, String(name).trim(), color || null);
+    'INSERT INTO segmentations (study_id, name, color, interpreted_type) VALUES (?, ?, ?, ?)'
+  ).run(studyId, String(name).trim(), color || null, interpretedType || null);
 
-  auditLog(db, { reqId, userId, action: 'create_segmentation', resourceType: 'segmentation', resourceId: result.lastInsertRowid, metadata: { studyId, name } });
+  auditLog(db, { reqId, userId, action: 'create_segmentation', resourceType: 'segmentation', resourceId: result.lastInsertRowid, metadata: { studyId, name, interpretedType } });
 
   const row = db.prepare(`
-    SELECT id, study_id as studyId, name, color, approved, created_at as createdAt, 0 as sliceCount
+    SELECT id, study_id as studyId, name, color, approved,
+           interpreted_type as interpretedType, created_at as createdAt, 0 as sliceCount
     FROM segmentations WHERE id = ?
   `).get(result.lastInsertRowid);
   return row;
@@ -90,7 +92,8 @@ export function createSegmentation({ studyId, name, color, userId, reqId }) {
 export function getSegmentationMeta({ id, userId, reqId }) {
   const db = getDb();
   const row = db.prepare(`
-    SELECT id, study_id as studyId, name, color, approved, created_at as createdAt,
+    SELECT id, study_id as studyId, name, color, approved,
+           interpreted_type as interpretedType, created_at as createdAt,
            (SELECT COUNT(*) FROM segmentation_slices s WHERE s.segmentation_id = segmentations.id) as sliceCount
     FROM segmentations WHERE id = ?
   `).get(id);
@@ -101,7 +104,7 @@ export function getSegmentationMeta({ id, userId, reqId }) {
   return row;
 }
 
-export function updateSegmentationMeta({ id, name, color, approved, userId, reqId }) {
+export function updateSegmentationMeta({ id, name, color, approved, interpretedType, userId, reqId }) {
   const db = getDb();
   const existing = db.prepare('SELECT id FROM segmentations WHERE id = ?').get(id);
   if (!existing) {
@@ -119,7 +122,11 @@ export function updateSegmentationMeta({ id, name, color, approved, userId, reqI
   if (approved !== undefined) {
     db.prepare('UPDATE segmentations SET approved = ? WHERE id = ?').run(approved ? 1 : 0, id);
   }
-  auditLog(db, { reqId, userId, action: 'update_segmentation', resourceType: 'segmentation', resourceId: id, metadata: { name, color, approved } });
+  if (interpretedType !== undefined) {
+    db.prepare('UPDATE segmentations SET interpreted_type = ? WHERE id = ?')
+      .run(interpretedType ? String(interpretedType).trim() : null, id);
+  }
+  auditLog(db, { reqId, userId, action: 'update_segmentation', resourceType: 'segmentation', resourceId: id, metadata: { name, color, approved, interpretedType } });
   return getSegmentationMeta({ id, userId, reqId });
 }
 

@@ -1,9 +1,14 @@
 import { Box, Typography, TextField, MenuItem, Button, Table, TableBody, TableCell,
-  TableHead, TableRow, IconButton, Switch, Chip, Divider, Tooltip } from '@mui/material';
-import { Add, Delete, CloudDownload, Settings, BookmarkAdded, Bookmark, GppGood, RateReview } from '@mui/icons-material';
-import { useState } from 'react';
+  TableHead, TableRow, IconButton, Switch, Chip, Divider, Tooltip, Alert, Slider } from '@mui/material';
+import {
+  Add, Delete, CloudDownload, Settings, BookmarkAdded, Bookmark, GppGood, RateReview,
+  CallSplit, ContentCopy, Hotel, History, FactCheck, Straighten,
+} from '@mui/icons-material';
+import { useState, useCallback } from 'react';
 import { MACHINES, DOSE_ALGORITHMS, OPTIMIZATION_ALGORITHMS, NORMALIZATIONS, getMachine } from '../../lib/machines.js';
 import PeerReviewPanel from './PeerReviewPanel.jsx';
+import MlcLeafEditor from './MlcLeafEditor.jsx';
+import SubfieldEditor from './SubfieldEditor.jsx';
 
 const numOrNull = (v) => {
   const n = Number(v);
@@ -57,6 +62,23 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
   const [refPoints, setRefPoints] = useState([]);
   const [refPointsDirty, setRefPointsDirty] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+
+  // backend wiring state (B2–B6)
+  const [selectedBeamId, setSelectedBeamId] = useState(null);
+  const [normMode, setNormMode] = useState('ISOCENTER');
+  const [normValue, setNormValue] = useState('');
+  const [opNote, setOpNote] = useState('');
+  const [revisions, setRevisions] = useState([]);
+  const [showRevisions, setShowRevisions] = useState(false);
+  const [checks, setChecks] = useState(null);
+  const [cps, setCps] = useState(null); // control points of selected beam
+  const [subfields, setSubfields] = useState([]);
+  const [cpIndex, setCpIndex] = useState(0);
+  const [draftLeaves, setDraftLeaves] = useState(null);
+
+  const selectedBeam = (selectedPlan?.beams ?? []).find(b => b.id === selectedBeamId)
+    ?? (selectedPlan?.beams ?? [])[0]
+    ?? null;
 
   // sync the editor when switching plans
   const [loadedRefPointsFor, setLoadedRefPointsFor] = useState(null);
@@ -131,10 +153,24 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
   const handleApprovalAdvance = async () => {
     if (!selectedPlan) return;
     setFormError('');
+    setChecks(null);
     const next = NEXT_APPROVAL[selectedPlan.approvalStatus];
     if (!next) return;
     try {
+      // Eclipse Plan Approval Warnings & Errors — block APPROVED on errors
+      if (next === 'APPROVED' && ebrt.getApprovalChecks) {
+        const c = await ebrt.getApprovalChecks(selectedPlan.id);
+        setChecks(c);
+        const errors = c.errors ?? [];
+        if (errors.length > 0) {
+          setFormError(`Approval blocked (${errors.length} error${errors.length > 1 ? 's' : ''}): ${errors[0]}`);
+          return;
+        }
+      }
       await ebrt.updatePlan(selectedPlan.id, { approval_status: next });
+      if (next === 'APPROVED' && ebrt.captureRevision) {
+        await ebrt.captureRevision(selectedPlan.id, 'auto: approved').catch(() => {});
+      }
     } catch (err) {
       setFormError(err.message);
     }
@@ -172,6 +208,145 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
     try {
       await ebrt.saveAsTemplate(selectedPlan.id);
       setFormError(''); // saved
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  const handleNormalize = async () => {
+    if (!selectedPlan) return;
+    setFormError('');
+    setOpNote('');
+    try {
+      const r = await ebrt.normalizePlan(selectedPlan.id, normMode, normValue === '' ? undefined : Number(normValue));
+      setOpNote(`Normalized (${normMode}) ×${r?.factor?.toFixed?.(4) ?? r?.factor ?? '?'}`);
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  const handleOpposing = async () => {
+    if (!selectedPlan || !selectedBeam) return;
+    setFormError('');
+    setOpNote('');
+    try {
+      await ebrt.addOpposingField(selectedPlan.id, selectedBeam.beamNumber);
+      setOpNote(`Opposing field created from beam ${selectedBeam.beamNumber}`);
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  const handleAddCouch = async () => {
+    setFormError('');
+    setOpNote('');
+    try {
+      const r = await ebrt.addCouchStructure({});
+      setOpNote(`Couch structure created (${r?.sliceCount ?? '?'} slices)`);
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  const handleLoadChecks = async () => {
+    if (!selectedPlan) return;
+    setFormError('');
+    try {
+      const c = await ebrt.getApprovalChecks(selectedPlan.id);
+      setChecks(c);
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  const handleShowRevisions = async () => {
+    if (!selectedPlan) return;
+    setFormError('');
+    try {
+      const rows = await ebrt.listRevisions(selectedPlan.id);
+      setRevisions(rows);
+      setShowRevisions(true);
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  const handleCaptureRevision = async () => {
+    if (!selectedPlan) return;
+    try {
+      await ebrt.captureRevision(selectedPlan.id, 'manual');
+      const rows = await ebrt.listRevisions(selectedPlan.id);
+      setRevisions(rows);
+      setOpNote('Revision snapshot captured');
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  const handleLoadBeamDetail = useCallback(async (beam) => {
+    if (!beam || !ebrt.getControlPoints) return;
+    setSelectedBeamId(beam.id);
+    setCpIndex(0);
+    setDraftLeaves(null);
+    try {
+      const [cp, sf] = await Promise.all([
+        ebrt.getControlPoints(beam.id).catch(() => []),
+        ebrt.listSubfields(beam.id).catch(() => []),
+      ]);
+      setCps(cp);
+      setSubfields(sf);
+    } catch (err) {
+      setFormError(err.message);
+    }
+  }, [ebrt]);
+
+  const activeCp = cps && cps.length > 0 ? cps[Math.min(cpIndex, cps.length - 1)] : null;
+
+  const handleSaveCpMlc = async () => {
+    if (!selectedBeam || !cps || !draftLeaves) return;
+    setFormError('');
+    try {
+      const next = cps.map((cp, i) => {
+        if (i !== Math.min(cpIndex, cps.length - 1)) return cp;
+        return { ...cp, mlc: { ...(cp.mlc ?? { type: 'MLCX' }), leafPairs: draftLeaves } };
+      });
+      const updated = await ebrt.saveControlPoints(selectedBeam.id, next);
+      setCps(updated);
+      setDraftLeaves(null);
+      setOpNote(`CP${Math.min(cpIndex, cps.length - 1)} MLC saved`);
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  const handleAddSubfield = async (payload) => {
+    if (!selectedBeam) return;
+    try {
+      await ebrt.addSubfield(selectedBeam.id, payload);
+      const sf = await ebrt.listSubfields(selectedBeam.id);
+      setSubfields(sf);
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  const handleDeleteSubfield = async (subfieldId) => {
+    if (!selectedBeam) return;
+    try {
+      await ebrt.removeSubfield(selectedBeam.id, subfieldId);
+      setSubfields(prev => prev.filter(s => s.id !== subfieldId));
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  const handleUpdateSubfield = async (subfieldId, patch) => {
+    if (!selectedBeam) return;
+    try {
+      await ebrt.updateSubfield(selectedBeam.id, subfieldId, patch);
+      const sf = await ebrt.listSubfields(selectedBeam.id);
+      setSubfields(sf);
+      setOpNote('Subfield MLC updated');
     } catch (err) {
       setFormError(err.message);
     }
@@ -447,8 +622,9 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
                 <TableRow
                   key={b.id}
                   hover
-                  onClick={() => setSelectedPlanId(selectedPlanId)} // row click keeps plan selected
-                  sx={{ cursor: 'default' }}
+                  selected={selectedBeam?.id === b.id}
+                  onClick={() => handleLoadBeamDetail(b)}
+                  sx={{ cursor: 'pointer' }}
                 >
                   <TableCell>{b.beamNumber}</TableCell>
                   <TableCell>{b.beamType}</TableCell>
@@ -470,6 +646,184 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
               ))}
             </TableBody>
           </Table>
+
+          {/* selected-beam detail: control points + MLC + subfields + opposing */}
+          {selectedBeam && (
+            <Box sx={{ px: 1, py: 0.75, display: 'flex', flexDirection: 'column', gap: 0.5,
+                       borderBottom: '1px solid rgba(88,196,220,0.12)' }}>
+              <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary', fontFamily: 'mono' }}>
+                BEAM {selectedBeam.beamNumber} · {selectedBeam.beamType}
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                <Tooltip title="Create the 180° opposing field (Eclipse Opposing Field)">
+                  <Button size="small" variant="outlined" startIcon={<CallSplit fontSize="small" />}
+                          onClick={handleOpposing}
+                          sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                    Opposing
+                  </Button>
+                </Tooltip>
+                {cps && cps.length > 0 && (
+                  <Chip size="small" label={`${cps.length} CPs`}
+                        sx={{ height: 18, fontSize: '0.55rem', fontFamily: 'mono' }} />
+                )}
+                {subfields.length > 0 && (
+                  <Chip size="small" label={`${subfields.length} FiF`}
+                        sx={{ height: 18, fontSize: '0.55rem', fontFamily: 'mono' }} />
+                )}
+              </Box>
+
+              {/* MLC leaf editor for the selected control point */}
+              {cps && cps.length > 0 && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Typography variant="caption" sx={{ fontSize: '0.58rem', color: 'text.secondary', fontFamily: 'mono' }}>
+                      CP
+                    </Typography>
+                    <Slider
+                      size="small" min={0} max={cps.length - 1} value={Math.min(cpIndex, cps.length - 1)}
+                      onChange={(_, v) => { setCpIndex(v); setDraftLeaves(null); }}
+                      sx={{ flex: 1, color: '#58c4dc', py: 0.25 }}
+                      aria-label="control-point-index"
+                    />
+                    <Typography variant="caption" sx={{ fontSize: '0.58rem', fontFamily: 'mono', color: 'text.secondary' }}>
+                      {Math.min(cpIndex, cps.length - 1)}/{cps.length - 1}
+                    </Typography>
+                  </Box>
+                  {activeCp?.mlc?.leafPairs?.length > 0 ? (
+                    <>
+                      <MlcLeafEditor
+                        leafPairs={draftLeaves ?? activeCp.mlc.leafPairs}
+                        label={`CP${Math.min(cpIndex, cps.length - 1)} ${activeCp.mlc.type ?? 'MLCX'}`}
+                        onChange={(leafPairs) => setDraftLeaves(leafPairs)}
+                      />
+                      <Button size="small" variant="outlined" disabled={!draftLeaves}
+                              onClick={handleSaveCpMlc}
+                              sx={{ fontSize: '0.58rem', alignSelf: 'flex-start' }}>
+                        Save CP MLC
+                      </Button>
+                    </>
+                  ) : (
+                    <Typography variant="caption" sx={{ fontSize: '0.55rem', color: 'text.disabled' }}>
+                      This control point has no MLC data
+                      {activeCp?.gantryAngle != null ? ` · gantry ${activeCp.gantryAngle}°` : ''}
+                    </Typography>
+                  )}
+                </Box>
+              )}
+
+              <SubfieldEditor
+                beam={selectedBeam}
+                subfields={subfields}
+                onAdd={handleAddSubfield}
+                onDelete={handleDeleteSubfield}
+                onChange={handleUpdateSubfield}
+              />
+            </Box>
+          )}
+
+          {/* plan ops: normalize / couch / checks / revisions */}
+          <Box sx={{ px: 1, py: 0.75, display: 'flex', flexDirection: 'column', gap: 0.6,
+                     borderBottom: '1px solid rgba(88,196,220,0.12)' }}>
+            <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary', fontFamily: 'mono' }}>
+              PLAN OPS
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
+              <TextField size="small" select label="Normalize" value={normMode}
+                         onChange={e => setNormMode(e.target.value)}
+                         sx={{ minWidth: 130 }}
+                         inputProps={{ style: { fontSize: '0.65rem' } }}>
+                <MenuItem value="ISOCENTER" sx={{ fontSize: '0.7rem' }}>Isocenter %</MenuItem>
+                <MenuItem value="TARGET_MAX" sx={{ fontSize: '0.7rem' }}>Target Max</MenuItem>
+                <MenuItem value="TARGET_MEAN" sx={{ fontSize: '0.7rem' }}>Target Mean</MenuItem>
+                <MenuItem value="TARGET_MIN" sx={{ fontSize: '0.7rem' }}>Target Min</MenuItem>
+                <MenuItem value="PERCENT_OF_TARGET" sx={{ fontSize: '0.7rem' }}>% of Target (cGy)</MenuItem>
+              </TextField>
+              {normMode === 'ISOCENTER' || normMode === 'PERCENT_OF_TARGET' ? (
+                <TextField size="small" label={normMode === 'ISOCENTER' ? '%' : 'cGy'}
+                           value={normValue} onChange={e => setNormValue(e.target.value)}
+                           sx={{ width: 70 }}
+                           inputProps={{ style: { fontSize: '0.65rem' } }} />
+              ) : null}
+              <Tooltip title="Rescale the plan dose grid (requires an associated dose file)">
+                <Button size="small" variant="outlined" startIcon={<Straighten fontSize="small" />}
+                        onClick={handleNormalize}
+                        sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                  Apply
+                </Button>
+              </Tooltip>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+              <Tooltip title="Generate a couch structure ROI for this study (Eclipse Couch Structures)">
+                <Button size="small" variant="outlined" startIcon={<Hotel fontSize="small" />}
+                        onClick={handleAddCouch}
+                        sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                  Couch
+                </Button>
+              </Tooltip>
+              <Tooltip title="Run plan approval checks (errors/warnings)">
+                <Button size="small" variant="outlined" startIcon={<FactCheck fontSize="small" />}
+                        onClick={handleLoadChecks}
+                        sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                  Checks
+                </Button>
+              </Tooltip>
+              <Tooltip title="Plan revisions history (Eclipse Revisions to Plans)">
+                <Button size="small" variant={showRevisions ? 'contained' : 'outlined'}
+                        startIcon={<History fontSize="small" />}
+                        onClick={handleShowRevisions}
+                        sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                  Revisions
+                </Button>
+              </Tooltip>
+              <Button size="small" variant="text" onClick={handleCaptureRevision}
+                      sx={{ fontSize: '0.6rem', color: 'text.secondary', minWidth: 0 }}>
+                Snapshot
+              </Button>
+            </Box>
+
+            {checks && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+                {(checks.errors ?? []).map((e, i) => (
+                  <Alert key={`e${i}`} severity="error" sx={{ py: 0, fontSize: '0.6rem' }}>{e}</Alert>
+                ))}
+                {(checks.warnings ?? []).map((w, i) => (
+                  <Alert key={`w${i}`} severity="warning" sx={{ py: 0, fontSize: '0.6rem' }}>{w}</Alert>
+                ))}
+                {(checks.errors ?? []).length === 0 && (checks.warnings ?? []).length === 0 && (
+                  <Alert severity="success" sx={{ py: 0, fontSize: '0.6rem' }}>No issues</Alert>
+                )}
+              </Box>
+            )}
+
+            {showRevisions && (
+              <Box sx={{ border: '1px solid rgba(88,196,220,0.12)', borderRadius: 0.5, maxHeight: 140, overflow: 'auto' }}>
+                {revisions.length === 0 && (
+                  <Typography variant="caption" sx={{ display: 'block', px: 1, py: 0.5, fontSize: '0.6rem', color: 'text.disabled' }}>
+                    No revisions yet
+                  </Typography>
+                )}
+                {revisions.map(r => (
+                  <Box key={r.revisionNo ?? r.id} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.25 }}>
+                    <Typography sx={{ flex: 1, fontSize: '0.6rem', fontFamily: 'mono' }}>
+                      v{r.revisionNo} · {r.createdAt ?? r.created_at ?? ''}
+                    </Typography>
+                    <Button size="small" sx={{ fontSize: '0.55rem', minWidth: 0 }}
+                            onClick={() => ebrt.rollbackRevision(selectedPlan.id, r.revisionNo)
+                              .then(() => setOpNote(`Rolled back to v${r.revisionNo}`))
+                              .catch(err => setFormError(err.message))}>
+                      Rollback
+                    </Button>
+                  </Box>
+                ))}
+              </Box>
+            )}
+
+            {opNote && (
+              <Typography variant="caption" sx={{ fontSize: '0.58rem', color: 'text.disabled' }}>
+                {opNote}
+              </Typography>
+            )}
+          </Box>
 
           {/* add beam form */}
           <Box sx={{ px: 1.5, py: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}>

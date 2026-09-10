@@ -166,7 +166,16 @@ function inferROIType(name) {
   if (n.startsWith('GTV')) return 'GTV';
   if (n.startsWith('CTV')) return 'CTV';
   if (n.includes('BOLUS')) return 'EXTERNAL';
+  if (n.startsWith('BODY')) return 'EXTERNAL';
+  if (n.includes('CORD') || n.includes('AVOID') || n.includes('PRV')) return 'AVOIDANCE';
   return 'ORGAN';
+}
+
+/** Prefer the explicit stored type; fall back to name inference. */
+function roiTypeForSegment(seg) {
+  const stored = seg.interpretedType || seg.interpreted_type;
+  if (stored && String(stored).trim()) return String(stored).trim().toUpperCase();
+  return inferROIType(seg.name);
 }
 
 /**
@@ -213,7 +222,7 @@ export function buildRTStructDataset({ study, segmentationRows, contourRows, ctS
       ObservationNumber: idx + 1,
       ReferencedROINumber: idx + 1,
       ObservationLabel: seg.name,
-      RTROIInterpretedType: inferROIType(seg.name),
+      RTROIInterpretedType: roiTypeForSegment(seg),
     })),
     ROIContourSequence: segmentationRows.map((seg, idx) => {
       const contours = (contourRows[seg.id] ?? []).map(row => ({
@@ -244,7 +253,7 @@ export function rtStructFromSegmentations({ studyId, segmentationIds, userId, re
   const study = loadStudyMeta(db, studyId);
 
   let segs = db.prepare(`
-    SELECT id, name, color FROM segmentations
+    SELECT id, name, color, interpreted_type as interpretedType FROM segmentations
     WHERE study_id = ?
     ORDER BY id
   `).all(studyId);

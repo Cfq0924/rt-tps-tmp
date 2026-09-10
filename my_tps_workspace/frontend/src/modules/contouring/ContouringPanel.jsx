@@ -1,6 +1,12 @@
 import { useState } from 'react';
-import { Box, Typography, ButtonGroup, Button, Tooltip, Slider, TextField, Divider, MenuItem } from '@mui/material';
-import { Brush, Clear, CropSquare, Circle, Undo, Redo, Save, FormatColorFill, AutoFixHigh, OpenInFull, Merge } from '@mui/icons-material';
+import {
+  Box, Typography, ButtonGroup, Button, Tooltip, Slider, TextField,
+  Divider, MenuItem,
+} from '@mui/material';
+import {
+  Brush, Clear, CropSquare, Circle, Undo, Redo, Save, FormatColorFill,
+  AutoFixHigh, OpenInFull, Merge, ContentCut, CropFree, FilterCenterFocus,
+} from '@mui/icons-material';
 import SegmentPanel from './SegmentPanel.jsx';
 
 const TOOLS = [
@@ -9,12 +15,13 @@ const TOOLS = [
   { id: 'floodfill', icon: <FormatColorFill fontSize="small" />, label: 'Flood fill (HU)' },
   { id: 'rect', icon: <CropSquare fontSize="small" />, label: 'Rectangle fill' },
   { id: 'circle', icon: <Circle fontSize="small" />, label: 'Ellipse fill' },
+  { id: 'crop', icon: <CropFree fontSize="small" />, label: 'Crop (drag box)' },
 ];
 
 /**
  * ContouringPanel - right panel of the contouring module: paint tools,
- * brush size, history and the segment list. The paint layer itself renders
- * above the shared viewport (owned by the workspace shell).
+ * brush size, structure ops (expand / body / boolean / cleanup / wall)
+ * and the segment list.
  *
  * @param {Object} props - the useContouring() hook result plus slice helpers
  */
@@ -22,6 +29,10 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
   const c = contouring;
   const [boolSource, setBoolSource] = useState('');
   const [boolOp, setBoolOp] = useState('subtract');
+  const [minAreaMm2, setMinAreaMm2] = useState(4);
+  const [outerMm, setOuterMm] = useState(2);
+  const [innerMm, setInnerMm] = useState(2);
+  const [opNote, setOpNote] = useState('');
 
   const toolButton = (t) => (
     <Tooltip key={t.id} title={t.label}>
@@ -66,6 +77,19 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
             sx={{ color: '#58c4dc' }}
           />
         </Box>
+        {c.tool === 'crop' && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <TextField
+              size="small" select label="Crop mode" value={c.cropMode}
+              onChange={e => c.setCropMode(e.target.value)}
+              sx={{ flex: 1 }}
+              inputProps={{ style: { fontSize: '0.65rem' } }}
+            >
+              <MenuItem value="keepInside" sx={{ fontSize: '0.7rem' }}>Keep inside</MenuItem>
+              <MenuItem value="keepOutside" sx={{ fontSize: '0.7rem' }}>Keep outside</MenuItem>
+            </TextField>
+          </Box>
+        )}
         <Box sx={{ display: 'flex', gap: 0.5 }}>
           <Button size="small" startIcon={<Undo fontSize="small" />} disabled={!c.canUndo}
                   onClick={c.undo} sx={{ fontSize: '0.65rem' }}>Undo</Button>
@@ -82,9 +106,10 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
           <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary', fontFamily: 'mono' }}>
             STRUCTURE OPS (active segment)
           </Typography>
-          <Box sx={{ display: 'flex', gap: 0.5 }}>
+          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
             <TextField size="small" label="Margin (mm)" defaultValue={3}
-                       id="expand-margin-input" inputProps={{ style: { fontSize: '0.65rem' } }} />
+                       id="expand-margin-input" sx={{ width: 90 }}
+                       inputProps={{ style: { fontSize: '0.65rem' } }} />
             <Button size="small" variant="outlined" startIcon={<OpenInFull fontSize="small" />}
                     onClick={() => {
                       const el = document.getElementById('expand-margin-input');
@@ -102,6 +127,68 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
               </Button>
             </Tooltip>
           </Box>
+
+          {/* Clean-up: remove small fragments */}
+          <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+            <TextField
+              size="small" label="Min area (mm²)" type="number" value={minAreaMm2}
+              onChange={e => setMinAreaMm2(Number(e.target.value) || 1)}
+              sx={{ width: 100 }}
+              inputProps={{ min: 0.5, step: 0.5, style: { fontSize: '0.65rem' } }}
+            />
+            <Tooltip title="Eclipse Clean-up: remove connected fragments smaller than min area on every painted slice">
+              <Button
+                size="small" variant="outlined" startIcon={<ContentCut fontSize="small" />}
+                aria-label="cleanup-apply"
+                onClick={() => {
+                  const stats = c.cleanupActive(minAreaMm2);
+                  setOpNote(`Clean-up: removed ${stats.removed} voxels, kept ${stats.kept}`);
+                }}
+                sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}
+              >
+                Clean-up
+              </Button>
+            </Tooltip>
+          </Box>
+
+          {/* Extract Wall */}
+          <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
+            <TextField
+              size="small" label="Outer (mm)" type="number" value={outerMm}
+              onChange={e => setOuterMm(Number(e.target.value) || 0)}
+              sx={{ width: 88 }}
+              inputProps={{ min: 0, step: 0.5, style: { fontSize: '0.65rem' } }}
+            />
+            <TextField
+              size="small" label="Inner (mm)" type="number" value={innerMm}
+              onChange={e => setInnerMm(Number(e.target.value) || 0)}
+              sx={{ width: 88 }}
+              inputProps={{ min: 0, step: 0.5, style: { fontSize: '0.65rem' } }}
+            />
+            <Tooltip title="Extract Wall: create a ring segment (outer dilate − inner erode) around the active structure">
+              <Button
+                size="small" variant="outlined" startIcon={<FilterCenterFocus fontSize="small" />}
+                aria-label="extract-wall"
+                onClick={async () => {
+                  try {
+                    const id = await c.extractWallFromActive(outerMm, innerMm);
+                    setOpNote(id ? `Wall segment created (id ${id})` : 'Extract Wall: no wall generated');
+                  } catch (err) {
+                    setOpNote(`Extract Wall failed: ${err.message}`);
+                  }
+                }}
+                sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}
+              >
+                Extract Wall
+              </Button>
+            </Tooltip>
+          </Box>
+
+          {opNote && (
+            <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.disabled', px: 0.25 }}>
+              {opNote}
+            </Typography>
+          )}
 
           {/* boolean ops: source segment INTO the active segment */}
           <Box sx={{ display: 'flex', gap: 0.5 }}>
@@ -148,6 +235,7 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
           segments={c.segments}
           activeSegmentId={c.activeSegmentId}
           onAddSegment={c.addSegment}
+          onAddFromDictionary={c.addSegmentFromDictionary}
           onUpdateSegment={c.updateSegment}
           onDeleteSegment={c.deleteSegment}
           onSelectSegment={c.setActiveSegmentId}

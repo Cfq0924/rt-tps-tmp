@@ -11,7 +11,7 @@ import {
   imageToHU,
 } from './paintCore.js';
 
-const TOOLS = { BRUSH: 'brush', ERASER: 'eraser', RECT: 'rect', CIRCLE: 'circle', FLOOD: 'floodfill' };
+const TOOLS = { BRUSH: 'brush', ERASER: 'eraser', RECT: 'rect', CIRCLE: 'circle', FLOOD: 'floodfill', CROP: 'crop' };
 
 /**
  * PaintLayer - interactive canvas for the contouring module.
@@ -37,6 +37,8 @@ const TOOLS = { BRUSH: 'brush', ERASER: 'eraser', RECT: 'rect', CIRCLE: 'circle'
  * @param {Function} props.onStrokeEnd - () => void (bump version)
  * @param {boolean} props.activeSegmentApproved - when true, painting is blocked
  * @param {Function} props.onFloodFill - (imageIJ, event) => void for the flood-fill tool
+ * @param {Function} props.onCrop - (sliceIdx, rect, mode) => void; crop drag commits via hook
+ * @param {'keepInside'|'keepOutside'} props.cropMode
  */
 export default function PaintLayer({
   enabled,
@@ -54,9 +56,12 @@ export default function PaintLayer({
   onStrokeEnd,
   activeSegmentApproved = false,
   onFloodFill,
+  onCrop,
+  cropMode = 'keepInside',
 }) {
   const canvasRef = useRef(null);
   const drawingRef = useRef(null); // { lastImg: {i,j}, startImg: {i,j} }
+  const cropPreviewRef = useRef(null); // {x0,y0,x1,y1} in image pixels
 
   // Convert canvas CSS coordinates → CT image pixel coordinates
   const canvasToImage = (clientX, clientY) => {
@@ -115,6 +120,16 @@ export default function PaintLayer({
       }
     };
 
+    const drawCropPreview = (start, end) => {
+      cropPreviewRef.current = { x0: start.i, y0: start.j, x1: end.i, y1: end.j };
+      // force a redraw of the contour layer (which also paints the preview)
+      onStrokeEnd?.();
+    };
+
+    const clearOverlay = () => {
+      cropPreviewRef.current = null;
+    };
+
     const onPointerDown = (e) => {
       if (!enabled || activeSegmentId == null || !ctGeom) return;
       if (activeSegmentApproved) return; // approved segments are read-only
@@ -122,6 +137,7 @@ export default function PaintLayer({
       canvas.setPointerCapture(e.pointerId);
       const img = canvasToImage(e.clientX, e.clientY);
       const mask = getMask();
+      const isShape = tool === TOOLS.RECT || tool === TOOLS.CIRCLE || tool === TOOLS.CROP;
       drawingRef.current = {
         lastImg: img,
         startImg: { ...img },
@@ -139,12 +155,20 @@ export default function PaintLayer({
         if (ctPixels) {
           onFloodFill?.(sliceIdx, Math.floor(img.i), Math.floor(img.j), ctPixels);
         }
+      } else if (tool === TOOLS.CROP) {
+        // crop: draw preview rect only (no mask mutation until pointerup)
+        drawCropPreview(img, img);
       }
     };
 
     const onPointerMove = (e) => {
       if (!drawingRef.current) return;
       const img = canvasToImage(e.clientX, e.clientY);
+      if (tool === TOOLS.CROP) {
+        drawCropPreview(drawingRef.current.startImg, img);
+        drawingRef.current.lastImg = img;
+        return; // no strokeEnd — crop preview is overlay-only
+      }
       applyAt(img);
       drawingRef.current.lastImg = img;
       onStrokeEnd?.(); // repaint (does not clear undo)
@@ -152,9 +176,19 @@ export default function PaintLayer({
 
     const onPointerUp = (e) => {
       if (!drawingRef.current) return;
-      // final apply for shape tools (drag preview already wrote, this is the commit)
       const img = canvasToImage(e.clientX, e.clientY);
-      if (tool === TOOLS.RECT || tool === TOOLS.CIRCLE) applyAt(img);
+      if (tool === TOOLS.RECT || tool === TOOLS.CIRCLE) {
+        applyAt(img);
+      } else if (tool === TOOLS.CROP) {
+        const start = drawingRef.current.startImg;
+        const w = Math.abs(img.i - start.i);
+        const h = Math.abs(img.j - start.j);
+        // ignore accidental clicks (degenerate rect)
+        if (w > 1 && h > 1) {
+          onCrop?.(sliceIdx, { x0: start.i, y0: start.j, x1: img.i, y1: img.j }, cropMode);
+        }
+        clearOverlay();
+      }
       drawingRef.current = null;
       onStrokeEnd?.();
     };
@@ -250,6 +284,21 @@ export default function PaintLayer({
           ctx.closePath();
         }
         ctx.stroke();
+      }
+
+      // crop tool drag preview (dashed teal rect in image pixel space)
+      const crop = cropPreviewRef.current;
+      if (crop) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = '#58c4dc';
+        ctx.lineWidth = 1.5 / avgScale;
+        ctx.setLineDash([4 / avgScale, 3 / avgScale]);
+        const x = Math.min(crop.x0, crop.x1);
+        const y = Math.min(crop.y0, crop.y1);
+        const w = Math.abs(crop.x1 - crop.x0);
+        const h = Math.abs(crop.y1 - crop.y0);
+        ctx.strokeRect(x, y, w, h);
+        ctx.setLineDash([]);
       }
       ctx.restore();
     };
