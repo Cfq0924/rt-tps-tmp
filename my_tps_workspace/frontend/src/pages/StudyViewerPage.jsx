@@ -573,6 +573,20 @@ export default function StudyViewerPage() {
     }));
   }, [currentImageIndex]);
 
+  // MPR panes centre on the plan isocentre (EBRT) or the volume centre (MPR)
+  const mprIso = useMemo(() => {
+    if (isEbrtQuad && ebrt.selectedPlan?.isocenterX != null) {
+      return [ebrt.selectedPlan.isocenterX, ebrt.selectedPlan.isocenterY, ebrt.selectedPlan.isocenterZ];
+    }
+    if (!mprState.geom) return null;
+    const g = mprState.geom;
+    return [
+      g.originX + g.cols * g.spacingX / 2,
+      g.originY + g.rows * g.spacingY / 2,
+      g.zPositions[Math.floor(g.numSlices / 2)],
+    ];
+  }, [isEbrtQuad, ebrt.selectedPlan, mprState.geom]);
+
   const handleJumpToGlobalMax = useCallback(() => {
     if (!doseGrid || !doseSamplingGeom || !filesForModality.length) return;
     const { flatIndex } = findGlobalMax(doseGrid);
@@ -1027,6 +1041,8 @@ export default function StudyViewerPage() {
               sliceIdx={currentImageIndex}
               onCrosshairChange={handleMprCrosshair}
               dose={mprDoseProps}
+              masterViewport={viewportInstance}
+              iso={mprIso}
             />
           </Box>
         )}
@@ -1040,6 +1056,8 @@ export default function StudyViewerPage() {
               sliceIdx={currentImageIndex}
               onCrosshairChange={handleMprCrosshair}
               dose={mprDoseProps}
+              masterViewport={viewportInstance}
+              iso={mprIso}
             />
           </Box>
         )}
@@ -1078,6 +1096,8 @@ export default function StudyViewerPage() {
                   doseAtFull: (doseData.maxDose ?? 100) * (doseThreshold / 100),
                   opacity: doseOpacity,
                 } : null}
+                masterViewport={viewportInstance}
+                iso={mprIso}
               />
             </Box>
             <Box sx={{ flex: 1, position: 'relative' }}>
@@ -1099,6 +1119,8 @@ export default function StudyViewerPage() {
                   doseAtFull: (doseData.maxDose ?? 100) * (doseThreshold / 100),
                   opacity: doseOpacity,
                 } : null}
+                masterViewport={viewportInstance}
+                iso={mprIso}
               />
             </Box>
           </Box>

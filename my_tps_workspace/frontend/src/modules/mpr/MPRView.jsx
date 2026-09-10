@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef } from 'react';
+import * as cornerstone from '@cornerstonejs/core';
 import { Box, Typography } from '@mui/material';
 import {
   sampleCoronal,
   sampleSagittal,
   huToRGBA,
   doseToRGBA,
-  zExtentMm,
+  sliceSpacing,
 } from '../../lib/mprVolume.js';
 import { trilinearSample } from '../../lib/doseSampling.js';
 
@@ -14,6 +15,10 @@ import { trilinearSample } from '../../lib/doseSampling.js';
  * cached CT volume by CPU resampling. Wheel scrolls the plane stack,
  * dragging moves the crosshair; a dose colour overlay is sampled from the
  * dose grid when enabled.
+ *
+ * All panes share ONE magnification: millimetres per CSS pixel is taken
+ * from the master (axial) viewport camera, and every pane centres on the
+ * isocentre — the Eclipse-style coordinated quad.
  *
  * Orientation conventions (HFS axial stack):
  *  - coronal: horizontal = x (R→L), vertical = slices (H→F), wheel = yIdx
@@ -27,6 +32,8 @@ import { trilinearSample } from '../../lib/doseSampling.js';
  * @param {Function} props.onCrosshairChange - ({xIdx?, yIdx?, sliceIdx?}) => void
  * @param {Object|null} props.dose - { grid, geom, doseAtFull, opacity } | null
  * @param {{wc:number, ww:number}} props.wl
+ * @param {Object|null} props.masterViewport - axial viewport (zoom master)
+ * @param {Array|null} props.iso - isocentre patient mm [x, y, z]
  */
 export default function MPRView({
   orientation,
@@ -36,6 +43,8 @@ export default function MPRView({
   onCrosshairChange,
   dose = null,
   wl = { wc: 40, ww: 400 },
+  masterViewport = null,
+  iso = null,
 }) {
   const canvasRef = useRef(null);
   const { volume, geom } = volumeState ?? {};
@@ -47,6 +56,44 @@ export default function MPRView({
       ? sampleCoronal(volume, geom, crosshair.yIdx)
       : sampleSagittal(volume, geom, crosshair.xIdx);
   }, [volume, geom, isCoronal, crosshair.yIdx, crosshair.xIdx]);
+
+  /**
+   * Shared view transform: mm per CSS pixel from the master camera; the
+   * pane centres on the isocentre. Returns the plane-pixel → canvas affine
+   * plus the crosshair position in canvas space.
+   */
+  const viewTransform = (rect) => {
+    const cam = masterViewport?.getCamera?.();
+    const masterH = masterViewport?.element?.clientHeight ?? 0;
+    if (!cam?.parallelScale || !masterH || !geom) return null;
+    const mmPerPx = cam.parallelScale / (masterH / 2);
+    const pxPerMm = 1 / mmPerPx;
+    const cx = rect.width / 2, cy = rect.height / 2;
+    const isoPt = iso ?? [
+      geom.originX + geom.cols * geom.spacingX / 2,
+      geom.originY + geom.rows * geom.spacingY / 2,
+      geom.zPositions[Math.floor(geom.numSlices / 2)],
+    ];
+    const dz = sliceSpacing(geom) || 1;
+    if (isCoronal) {
+      return {
+        a: geom.spacingX * pxPerMm,
+        d: -dz * pxPerMm,
+        e: cx + (geom.originX - isoPt[0]) * pxPerMm,
+        f: cy - (geom.zPositions[0] - isoPt[2]) * pxPerMm,
+        crossX: cx + (crosshair.xIdx * geom.spacingX + geom.originX - isoPt[0]) * pxPerMm,
+        crossY: cy - (geom.zPositions[Math.min(sliceIdx, geom.numSlices - 1)] - isoPt[2]) * pxPerMm,
+      };
+    }
+    return {
+      a: geom.spacingY * pxPerMm,
+      d: -dz * pxPerMm,
+      e: cx + (geom.originY - isoPt[1]) * pxPerMm,
+      f: cy - (geom.zPositions[0] - isoPt[2]) * pxPerMm,
+      crossX: cx + (crosshair.yIdx * geom.spacingY + geom.originY - isoPt[1]) * pxPerMm,
+      crossY: cy - (geom.zPositions[Math.min(sliceIdx, geom.numSlices - 1)] - isoPt[2]) * pxPerMm,
+    };
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -67,9 +114,8 @@ export default function MPRView({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, rect.width, rect.height);
 
-      const ox0 = 4, oy0 = 4; // label margin
       if (!sample || !geom) {
-        // centred loading state: bar + percentage
+        // centred loading state: bar + slice counter
         const msg = volumeState?.error ?? 'Reconstructing volume…';
         const prog = volumeState?.progress;
         ctx.textAlign = 'center';
@@ -91,6 +137,9 @@ export default function MPRView({
       }
 
       const { pixels, width, height } = sample;
+      const vt = viewTransform(rect);
+      if (!vt) return;
+
       const off = document.createElement('canvas');
       off.width = width;
       off.height = height;
@@ -98,7 +147,7 @@ export default function MPRView({
         new ImageData(huToRGBA(pixels, wl.wc, wl.ww), width, height), 0, 0,
       );
 
-      // dose overlay sampled at output resolution (2px steps)
+      // dose overlay sampled at output resolution (2px steps), same transform
       let doseCanvas = null;
       if (dose?.grid && dose?.geom) {
         doseCanvas = document.createElement('canvas');
@@ -126,47 +175,37 @@ export default function MPRView({
         );
       }
 
-      // fit into canvas preserving the mm aspect
-      const inPlaneMm = width * (isCoronal ? geom.spacingX : geom.spacingY);
-      const heightMm = zExtentMm(geom);
-      const scale = Math.min((rect.width - ox0 * 2) / inPlaneMm, (rect.height - oy0 * 2) / heightMm);
-      const drawW = inPlaneMm * scale;
-      const drawH = heightMm * scale;
-      const ox = (rect.width - drawW) / 2;
-      const oy = (rect.height - drawH) / 2;
-
       ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(off, ox, oy, drawW, drawH);
-      if (doseCanvas) {
-        ctx.drawImage(doseCanvas, ox, oy, drawW, drawH);
-      }
+      ctx.save();
+      ctx.setTransform(vt.a * dpr, 0, 0, vt.d * dpr, vt.e * dpr, vt.f * dpr);
+      ctx.drawImage(off, 0, 0);
+      if (doseCanvas) ctx.drawImage(doseCanvas, 0, 0);
+      ctx.restore();
 
-      // crosshair lines
+      // crosshair reference lines (canvas-space via the affine)
+      const cxLine = vt.a * (isCoronal ? crosshair.xIdx : crosshair.yIdx) + vt.e;
+      const cyLine = vt.d * sliceIdx + vt.f;
       ctx.strokeStyle = 'rgba(88,196,220,0.85)';
       ctx.lineWidth = 1;
-      const colW = drawW / width;
-      const rowH = drawH / height;
-      const cxLine = ox + ((isCoronal ? crosshair.xIdx : crosshair.yIdx) + 0.5) * colW;
-      const cyLine = oy + (sliceIdx + 0.5) * rowH;
       ctx.beginPath();
-      ctx.moveTo(cxLine, oy);
-      ctx.lineTo(cxLine, oy + drawH);
-      ctx.moveTo(ox, cyLine);
-      ctx.lineTo(ox + drawW, cyLine);
+      ctx.moveTo(cxLine, 0);
+      ctx.lineTo(cxLine, rect.height);
+      ctx.moveTo(0, cyLine);
+      ctx.lineTo(rect.width, cyLine);
       ctx.stroke();
 
       // orientation labels
       ctx.fillStyle = 'rgba(148,163,184,0.95)';
       ctx.font = '11px "IBM Plex Mono", monospace';
       const tags = isCoronal ? ['R', 'L', 'A', 'P'] : ['A', 'P', 'R', 'L'];
-      ctx.fillText(tags[0], ox + 6, oy + drawH - 8);
-      ctx.fillText(tags[1], ox + drawW - 16, oy + drawH - 8);
-      ctx.fillText('H', ox + 6, oy + 16);
-      ctx.fillText('F', ox + drawW / 2 - 4, oy + drawH - 8);
+      ctx.fillText(tags[0], 6, rect.height - 8);
+      ctx.fillText(tags[1], rect.width - 16, rect.height - 8);
+      ctx.fillText('H', 6, 16);
+      ctx.fillText('F', rect.width / 2 - 4, rect.height - 8);
       ctx.fillStyle = 'rgba(88,196,220,0.9)';
       ctx.fillText(
         `${isCoronal ? 'COR' : 'SAG'} idx ${isCoronal ? crosshair.yIdx : crosshair.xIdx}`,
-        ox + drawW - 90, oy + 16,
+        rect.width - 90, 16,
       );
     };
 
@@ -174,28 +213,33 @@ export default function MPRView({
     const ro = new ResizeObserver(() => draw());
     const parent = canvas.parentElement;
     if (parent) ro.observe(parent);
-    return () => ro.disconnect();
-  }, [sample, geom, isCoronal, crosshair.xIdx, crosshair.yIdx, sliceIdx, dose, wl.wc, wl.ww, volumeState]);
+    // mirror master (axial) zoom changes live
+    const el = masterViewport?.element;
+    const onCam = () => draw();
+    el?.addEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCam);
+    return () => {
+      ro.disconnect();
+      el?.removeEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCam);
+    };
+  }, [sample, geom, isCoronal, crosshair.xIdx, crosshair.yIdx, sliceIdx, dose, wl.wc, wl.ww, volumeState, masterViewport, iso]);
 
-  // pixel → output cell → crosshair update
+  /** canvas px → plane cell + slice row, via the same affine (inverse) */
   const handlePointer = (e) => {
-    if (!geom || !sample) return;
+    if (!geom || !sample || !masterViewport) return;
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const width = sample.width, height = sample.height;
-    const inPlaneMm = width * (isCoronal ? geom.spacingX : geom.spacingY);
-    const heightMm = zExtentMm(geom);
-    const scale = Math.min((rect.width - 8) / inPlaneMm, (rect.height - 8) / heightMm);
-    const drawW = inPlaneMm * scale, drawH = heightMm * scale;
-    const ox = (rect.width - drawW) / 2, oy = (rect.height - drawH) / 2;
-    const cx = e.clientX - rect.left - ox, cy = e.clientY - rect.top - oy;
-    if (cx < 0 || cy < 0 || cx > drawW || cy > drawH) return;
-    const cell = Math.max(0, Math.min(width - 1, Math.floor(cx / (drawW / width))));
-    const row = Math.max(0, Math.min(height - 1, Math.floor(cy / (drawH / height))));
+    const vt = viewTransform(rect);
+    if (!vt) return;
+    const mx = e.clientX - rect.left - vt.e;
+    const my = e.clientY - rect.top - vt.f;
     if (isCoronal) {
-      onCrosshairChange?.({ xIdx: cell, sliceIdx: row });
+      const xIdx = Math.max(0, Math.min(geom.cols - 1, Math.round(mx / vt.a)));
+      const k = Math.max(0, Math.min(geom.numSlices - 1, Math.round(my / vt.d)));
+      onCrosshairChange?.({ xIdx, sliceIdx: k });
     } else {
-      onCrosshairChange?.({ yIdx: cell, sliceIdx: row });
+      const yIdx = Math.max(0, Math.min(geom.rows - 1, Math.round(mx / vt.a)));
+      const k = Math.max(0, Math.min(geom.numSlices - 1, Math.round(my / vt.d)));
+      onCrosshairChange?.({ yIdx: Math.max(0, Math.min(geom.rows - 1, yIdx)), sliceIdx: k });
     }
   };
 
