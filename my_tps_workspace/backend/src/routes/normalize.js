@@ -8,10 +8,12 @@ const router = Router();
 // body: { mode, value? } — see PLAN-EBRT-BACKEND.md for modes
 router.post('/plans/:id/normalize', authMiddleware, async (req, res, next) => {
   try {
+    // value passes through raw: PERCENT_COVERS sends { cover, ofVolume } and
+    // REFERENCE_POINT sends a point name — the service validates each shape
     const result = await normalizePlanDose({
       planId: parseInt(req.params.id, 10),
       mode: req.body?.mode,
-      value: req.body?.value != null ? Number(req.body.value) : undefined,
+      value: req.body?.value,
       userId: req.user.userId,
       reqId: req.id,
     });

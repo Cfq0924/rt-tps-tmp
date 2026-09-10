@@ -4,6 +4,7 @@ import {
   listPlans,
   getPlan,
   createPlan,
+  computeTargetIsocenter,
   updatePlan,
   deletePlan,
   addBeam,
@@ -49,11 +50,23 @@ router.get('/study/:studyId/plans', authMiddleware, (req, res, next) => {
 });
 
 // POST /api/ebrt/study/:studyId/plans — create a plan
-router.post('/study/:studyId/plans', authMiddleware, (req, res, next) => {
+router.post('/study/:studyId/plans', authMiddleware, async (req, res, next) => {
   try {
+    const payload = { ...(req.body ?? {}) };
+    // Eclipse places the isocenter in the target when the planner doesn't
+    // set one — derive it from the target structure's contour centroid
+    if (payload.isocenter_x == null && payload.target_structure_name) {
+      const iso = await computeTargetIsocenter(
+        parseInt(req.params.studyId, 10), payload.target_structure_name);
+      if (iso) {
+        payload.isocenter_x = iso.x;
+        payload.isocenter_y = iso.y;
+        payload.isocenter_z = iso.z;
+      }
+    }
     const plan = createPlan({
       studyId: parseInt(req.params.studyId, 10),
-      payload: req.body ?? {},
+      payload,
       userId: req.user.userId,
       reqId: req.id,
     });

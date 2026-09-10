@@ -2,9 +2,9 @@ import { Box, Typography, TextField, MenuItem, Button, Table, TableBody, TableCe
   TableHead, TableRow, IconButton, Switch, Chip, Divider, Tooltip, Alert, Slider } from '@mui/material';
 import {
   Add, Delete, CloudDownload, Settings, BookmarkAdded, Bookmark, GppGood, RateReview,
-  CallSplit, ContentCopy, Hotel, History, FactCheck, Straighten,
+  CallSplit, ContentCopy, Hotel, History, FactCheck, Straighten, Calculate, PinDrop,
 } from '@mui/icons-material';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { MACHINES, DOSE_ALGORITHMS, OPTIMIZATION_ALGORITHMS, NORMALIZATIONS, getMachine } from '../../lib/machines.js';
 import PeerReviewPanel from './PeerReviewPanel.jsx';
 import MlcLeafEditor from './MlcLeafEditor.jsx';
@@ -79,6 +79,9 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
   const [opNote, setOpNote] = useState('');
   const [revisions, setRevisions] = useState([]);
   const [showRevisions, setShowRevisions] = useState(false);
+  const [doseBusy, setDoseBusy] = useState(false);
+  const [pointDoses, setPointDoses] = useState(null);
+  const [showPointDoses, setShowPointDoses] = useState(false);
   const [checks, setChecks] = useState(null);
   const [cps, setCps] = useState(null); // control points of selected beam
   const [subfields, setSubfields] = useState([]);
@@ -251,9 +254,71 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
     try {
       const payload = normMode === 'PERCENT_COVERS'
         ? { cover: numOrNull(coversDose), ofVolume: numOrNull(coversVol) }
-        : (normValue === '' ? undefined : Number(normValue));
+        : normMode === 'REFERENCE_POINT'
+          ? (normValue.trim() || undefined)
+          : ['TARGET_MAX', 'TARGET_MEAN', 'TARGET_MIN', 'NONE'].includes(normMode)
+            ? (normMode === 'NONE' ? undefined : (normValue === '' ? undefined : Number(normValue)))
+            : (normValue === '' ? undefined : Number(normValue));
       const r = await ebrt.normalizePlan(selectedPlan.id, normMode, payload);
       setOpNote(`Normalized (${normMode}) ×${r?.factor?.toFixed?.(4) ?? r?.factor ?? '?'}`);
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
+  // Reference RTDOSE for the dose engine: first RTDOSE file of the study
+  // (fetched once and cached — the engine only borrows its geometry).
+  const referenceDoseFileIdRef = useRef(null);
+  const resolveReferenceDoseFileId = async () => {
+    if (referenceDoseFileIdRef.current) return referenceDoseFileIdRef.current;
+    const res = await fetch(`/api/studies/${studyId}`, { credentials: 'include' });
+    if (!res.ok) throw new Error('Failed to load study files');
+    const { study } = await res.json();
+    const doseFile = (study.files ?? []).find(f => f.modality === 'RTDOSE');
+    if (!doseFile) throw new Error('No RTDOSE in this study to borrow geometry from');
+    referenceDoseFileIdRef.current = doseFile.id;
+    return doseFile.id;
+  };
+
+  const handleCalculateDose = async () => {
+    if (!selectedPlan) return;
+    setFormError('');
+    setOpNote('');
+    setDoseBusy(true);
+    try {
+      const referenceDoseFileId = await resolveReferenceDoseFileId();
+      const res = await fetch(`/api/dose-engine/study/${studyId}/compute`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          planId: selectedPlan.id,
+          referenceDoseFileId,
+          prescriptionCgy: selectedPlan.prescriptionDoseGy != null
+            ? Math.round(selectedPlan.prescriptionDoseGy * 100) : undefined,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || `Dose calculation failed (${res.status})`);
+      }
+      const r = await res.json();
+      referenceDoseFileIdRef.current = r.doseFileId ?? referenceDoseFileIdRef.current;
+      setOpNote(`Dose computed → RTDOSE file #${r.doseFileId ?? '?'}`);
+    } catch (err) {
+      setFormError(err.message);
+    } finally {
+      setDoseBusy(false);
+    }
+  };
+
+  const handleLoadPointDoses = async () => {
+    if (!selectedPlan) return;
+    setFormError('');
+    try {
+      const rows = await ebrt.getPointDoses(selectedPlan.id);
+      setPointDoses(rows);
+      setShowPointDoses(true);
     } catch (err) {
       setFormError(err.message);
     }
@@ -782,17 +847,31 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
                          onChange={e => setNormMode(e.target.value)}
                          sx={{ minWidth: 130 }}
                          inputProps={{ style: { fontSize: '0.65rem' } }}>
-                <MenuItem value="ISOCENTER" sx={{ fontSize: '0.7rem' }}>Isocenter %</MenuItem>
+                <MenuItem value="NONE" sx={{ fontSize: '0.7rem' }}>None</MenuItem>
                 <MenuItem value="TARGET_MAX" sx={{ fontSize: '0.7rem' }}>Target Max</MenuItem>
                 <MenuItem value="TARGET_MEAN" sx={{ fontSize: '0.7rem' }}>Target Mean</MenuItem>
                 <MenuItem value="TARGET_MIN" sx={{ fontSize: '0.7rem' }}>Target Min</MenuItem>
                 <MenuItem value="PERCENT_OF_TARGET" sx={{ fontSize: '0.7rem' }}>% of Target (cGy)</MenuItem>
                 <MenuItem value="PERCENT_COVERS" sx={{ fontSize: '0.7rem' }}>% covers % of Target</MenuItem>
+                <MenuItem value="BODY_MAX" sx={{ fontSize: '0.7rem' }}>Body Max %</MenuItem>
+                <MenuItem value="PRIMARY_REF_POINT" sx={{ fontSize: '0.7rem' }}>Primary Ref Point %</MenuItem>
+                <MenuItem value="REFERENCE_POINT" sx={{ fontSize: '0.7rem' }}>Reference Point…</MenuItem>
+                <MenuItem value="ISOCENTER" sx={{ fontSize: '0.7rem' }}>Isocenter %</MenuItem>
+                <MenuItem value="VALUE" sx={{ fontSize: '0.7rem' }}>Normalization Value %</MenuItem>
               </TextField>
-              {normMode === 'ISOCENTER' || normMode === 'PERCENT_OF_TARGET' ? (
-                <TextField size="small" label={normMode === 'ISOCENTER' ? '%' : 'cGy'}
-                           value={normValue} onChange={e => setNormValue(e.target.value)}
+              {['ISOCENTER', 'VALUE', 'BODY_MAX', 'PRIMARY_REF_POINT', 'TARGET_MAX', 'TARGET_MEAN', 'TARGET_MIN'].includes(normMode) ? (
+                <TextField size="small" label="%" value={normValue} onChange={e => setNormValue(e.target.value)}
+                           sx={{ width: 64 }}
+                           inputProps={{ style: { fontSize: '0.65rem' } }} />
+              ) : null}
+              {normMode === 'PERCENT_OF_TARGET' ? (
+                <TextField size="small" label="cGy" value={normValue} onChange={e => setNormValue(e.target.value)}
                            sx={{ width: 70 }}
+                           inputProps={{ style: { fontSize: '0.65rem' } }} />
+              ) : null}
+              {normMode === 'REFERENCE_POINT' ? (
+                <TextField size="small" label="Point name" value={normValue} onChange={e => setNormValue(e.target.value)}
+                           sx={{ width: 110 }}
                            inputProps={{ style: { fontSize: '0.65rem' } }} />
               ) : null}
               {normMode === 'PERCENT_COVERS' ? (
@@ -816,6 +895,22 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
               </Tooltip>
             </Box>
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+              <Tooltip title="Calculate the plan dose on the study's dose geometry (Eclipse Dose Calculation)">
+                <Button size="small" variant="outlined" startIcon={<Calculate fontSize="small" />}
+                        disabled={doseBusy}
+                        onClick={handleCalculateDose}
+                        sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                  {doseBusy ? 'Calculating…' : 'Calc Dose'}
+                </Button>
+              </Tooltip>
+              <Tooltip title="Reference point dose report (Eclipse Reference Points tab)">
+                <Button size="small" variant={showPointDoses ? 'contained' : 'outlined'}
+                        startIcon={<PinDrop fontSize="small" />}
+                        onClick={handleLoadPointDoses}
+                        sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                  Point Doses
+                </Button>
+              </Tooltip>
               <Tooltip title="Generate a couch structure ROI for this study (Eclipse Couch Structures)">
                 <Button size="small" variant="outlined" startIcon={<Hotel fontSize="small" />}
                         onClick={handleAddCouch}
@@ -854,6 +949,42 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
                 ))}
                 {(checks.errors ?? []).length === 0 && (checks.warnings ?? []).length === 0 && (
                   <Alert severity="success" sx={{ py: 0, fontSize: '0.6rem' }}>No issues</Alert>
+                )}
+              </Box>
+            )}
+
+            {showPointDoses && (
+              <Box sx={{ border: '1px solid rgba(88,196,220,0.12)', borderRadius: 0.5, maxHeight: 160, overflow: 'auto' }}>
+                {(pointDoses ?? []).length === 0 && (
+                  <Typography variant="caption" sx={{ display: 'block', px: 1, py: 0.5, fontSize: '0.6rem', color: 'text.disabled' }}>
+                    No reference points on this plan
+                  </Typography>
+                )}
+                {(pointDoses ?? []).length > 0 && (
+                  <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.58rem', py: 0.15, px: 0.75, fontFamily: 'IBM Plex Mono, monospace' } }}>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Point</TableCell>
+                        <TableCell>Type</TableCell>
+                        <TableCell align="right">Dose (cGy)</TableCell>
+                        <TableCell align="right">Per fx</TableCell>
+                        <TableCell align="right">% Rx</TableCell>
+                        <TableCell align="right">Limit</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {(pointDoses ?? []).map((p, i) => (
+                        <TableRow key={`${p.name}-${i}`}>
+                          <TableCell>{p.inGrid === false ? `${p.name} (off-grid)` : p.name}</TableCell>
+                          <TableCell>{p.type ?? (p.x == null ? 'DPV' : 'POINT')}</TableCell>
+                          <TableCell align="right">{p.totalDoseCgy != null ? p.totalDoseCgy.toFixed(1) : '—'}</TableCell>
+                          <TableCell align="right">{p.perFractionCgy != null ? p.perFractionCgy.toFixed(1) : '—'}</TableCell>
+                          <TableCell align="right">{p.pctOfRx != null ? `${p.pctOfRx.toFixed(0)}%` : '—'}</TableCell>
+                          <TableCell align="right">{p.totalDoseLimitGy != null ? `${p.totalDoseLimitGy} Gy` : '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 )}
               </Box>
             )}

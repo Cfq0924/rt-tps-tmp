@@ -44,6 +44,7 @@ export function coverageFactor(sortedDosesAsc, coverDose, ofVol) {
 
 const MODES = new Set([
   'TARGET_MAX', 'TARGET_MEAN', 'TARGET_MIN',
+  'PERCENT_OF_TARGET',         // target mean set to `value` cGy
   'PERCENT_COVERS',            // X% covers Y% of target structure
   'BODY_MAX',
   'PRIMARY_REF_POINT',         // 100% at primary reference point (DPV)
@@ -57,7 +58,12 @@ const MODES = new Set([
 function findRefPoint(plan, name = null) {
   const pts = plan.referencePoints ?? [];
   if (name) return pts.find(p => p.name === name) ?? null;
-  return pts.find(p => p.isDpv || p.type === 'TARGET') ?? pts[0] ?? null;
+  // dose can only be sampled at located points — prefer a located DPV,
+  // then any located point; a volume-only DPV has nothing to sample
+  return pts.find(p => (p.isDpv || p.type === 'TARGET') && p.x != null)
+    ?? pts.find(p => p.x != null)
+    ?? pts.find(p => p.isDpv || p.type === 'TARGET')
+    ?? pts[0] ?? null;
 }
 
 /** Dose (cGy) at a reference point from the grid, or null when outside. */
@@ -178,7 +184,9 @@ export async function targetStructureStats({ studyId, structureName, doseGrid, d
       }
     }
   }
-  return stats.voxelCount > 0 ? stats : null;
+  return stats.voxelCount > 0
+    ? { ...stats, mean: stats.sum / stats.voxelCount }
+    : null;
 }
 
 /**
@@ -197,13 +205,18 @@ export async function computeNormalizationFactor({ studyId, plan, mode, value, d
     return { factor: (rx * ((value ?? 100) / 100)) / max, description: `body max → ${value ?? 100}% of Rx` };
   }
   if (mode === 'PRIMARY_REF_POINT' || mode === 'REFERENCE_POINT') {
-    const pt = mode === 'PRIMARY_REF_POINT'
-      ? findRefPoint(plan)
-      : findRefPoint(plan, String(value ?? ''));
+    // PRIMARY_REF_POINT: value = target % of Rx (default 100).
+    // REFERENCE_POINT: value = the point name; optionally { name, pct }.
+    const name = mode === 'PRIMARY_REF_POINT' ? null
+      : (typeof value === 'object' && value !== null ? String(value.name ?? '') : String(value ?? ''));
+    const pct = mode === 'PRIMARY_REF_POINT'
+      ? (value ?? 100)
+      : (typeof value === 'object' && value !== null ? (value.pct ?? 100) : 100);
+    const pt = mode === 'PRIMARY_REF_POINT' ? findRefPoint(plan) : findRefPoint(plan, name);
     if (!pt) throw Object.assign(new Error('reference point not found'), { status: 400 });
     const dose = pointDose(doseGrid, doseMeta, pt);
     if (dose == null || dose <= 0) throw Object.assign(new Error('reference point is outside the dose grid'), { status: 400 });
-    return { factor: (rx * ((value ?? 100) / 100)) / dose, description: `${pt.name} → ${value ?? 100}% of Rx` };
+    return { factor: (rx * (pct / 100)) / dose, description: `${pt.name} → ${pct}% of Rx` };
   }
   if (mode === 'NONE') {
     return { factor: 1, description: 'no plan normalization' };
@@ -248,6 +261,9 @@ export async function computeNormalizationFactor({ studyId, plan, mode, value, d
     if (!value || value <= 0) throw Object.assign(new Error('value (% of Rx) is required'), { status: 400 });
     const desired = rx * (value / 100);
     const current = mode === 'TARGET_MAX' ? stats.max : mode === 'TARGET_MEAN' ? stats.mean : stats.min;
+    if (!current || current <= 0) {
+      throw Object.assign(new Error('target structure has zero dose in the grid — nothing to normalize'), { status: 400 });
+    }
     return { factor: desired / current, description: `${mode} → ${value}% of Rx` };
   }
   throw Object.assign(new Error(`unknown normalization mode: ${mode}`), { status: 400 });
@@ -276,6 +292,14 @@ export async function normalizePlanDose({ planId, mode, value, userId, reqId }) 
     doseMeta: grid,
     prescriptionCgy: (plan.prescriptionDoseGy ?? 0) * 100,
   });
+
+  if (!Number.isFinite(factor) || factor <= 0) {
+    // never touch the dose file with a bogus factor — an earlier NaN factor
+    // silently zeroed every pixel (round(v * NaN) === 0) and "succeeded"
+    throw Object.assign(new Error(
+      `normalization factor is not finite (${factor}) — the dose region does not overlap the target/point`),
+      { status: 400 });
+  }
 
   // regenerate the RTDOSE file: same geometry, raw stored pixels scaled by
   // the factor, DoseGridScaling unchanged — a deterministic, proven path

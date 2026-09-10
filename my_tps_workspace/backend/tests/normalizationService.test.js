@@ -179,6 +179,11 @@ describe('normalizationService', () => {
       studyId: STUDY_ID, structureName: 'PTV Test', doseGrid: pre.grid, doseMeta: pre,
     });
     assert.strictEqual(stats.voxelCount, 4, `voxels ${stats.voxelCount}`);
+    // grid may already be rescaled by earlier tests — assert scale-free facts
+    const spread = stats.max / stats.min;
+    assert.ok(spread > 1.9 && spread < 2.1, `max/min ${spread}`);
+    assert.ok(stats.mean > stats.min && stats.mean < stats.max);
+    assert.strictEqual(stats.doses.length, 4);
 
     const result = await svc.normalizePlanDose({
       planId: 1, mode: 'PERCENT_COVERS', value: { cover: 50, ofVolume: 50 }, userId: 1, reqId: 't',

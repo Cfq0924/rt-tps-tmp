@@ -2,6 +2,7 @@ import { getDb } from '../db/init.js';
 import { auditLog } from '../logging/index.js';
 import { parseRTPlan } from './rtPlanService.js';
 import { getDicomFile } from './dicomService.js';
+import { parseRTStruct } from './rtStructService.js';
 
 /**
  * External-beam plan persistence (EBRT module).
@@ -22,6 +23,37 @@ function str(v, fallback = null) {
   if (v === undefined || v === null) return fallback;
   const s = String(v).trim();
   return s || fallback;
+}
+
+/**
+ * Isocenter from the target structure: mean of the ROI's contour points
+ * (Eclipse places the isocenter inside the target when the planner doesn't
+ * pick one explicitly). Returns null when no RTSTRUCT/ROI is available.
+ */
+export async function computeTargetIsocenter(studyId, structureName) {
+  if (!structureName) return null;
+  try {
+    const db = getDb();
+    const rt = db.prepare(`
+      SELECT file_path FROM dicom_files
+      WHERE study_id = ? AND modality = 'RTSTRUCT'
+      ORDER BY id DESC LIMIT 1
+    `).get(studyId);
+    if (!rt) return null;
+    const { roiSequence, contourSequence } = await parseRTStruct(rt.file_path);
+    const roi = roiSequence.find(r => r.roiName === structureName);
+    if (!roi) return null;
+    let sx = 0, sy = 0, sz = 0, n = 0;
+    for (const c of contourSequence) {
+      if (c.referencedROINumber !== roi.roiNumber) continue;
+      for (let p = 0; p + 2 < c.contourData.length; p += 3) {
+        sx += c.contourData[p]; sy += c.contourData[p + 1]; sz += c.contourData[p + 2]; n++;
+      }
+    }
+    return n > 0 ? { x: sx / n, y: sy / n, z: sz / n } : null;
+  } catch {
+    return null;
+  }
 }
 
 export function validatePlanPayload(p = {}) {
@@ -718,6 +750,13 @@ export function rollbackToRevision({ planId, revisionNo, userId, reqId }) {
       b.wedgeAngle, b.bolus, b.meterset, b.leafPairCount,
     );
   }
+
+  // rolling back replaces the plan content — an existing approval (and its
+  // recorded couch shifts) no longer applies to the restored content
+  db.prepare(`
+    UPDATE ebrt_plans SET approval_status = 'UNAPPROVED', delta_couch_json = NULL
+    WHERE id = ? AND approval_status != 'UNAPPROVED'
+  `).run(planId);
 
   captureRevision({ planId: planId, userId, reqId }); // record the rollback as the new head
   auditLog(db, {
