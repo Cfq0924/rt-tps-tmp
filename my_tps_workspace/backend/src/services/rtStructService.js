@@ -17,7 +17,11 @@ export async function parseRTStruct(filePath) {
     throw new Error(`Failed to read DICOM file: ${err.message}`);
   }
 
-  const byteArray = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  // Copy into a fresh exact-size array: readFileSync can return a pooled
+  // Buffer view (byteOffset != 0) and dcmjs's stream ignores byteOffset,
+  // parsing garbage from elsewhere in the pool (intermittent
+  // "Invalid DICOM file, expected header is missing").
+  const byteArray = new Uint8Array(buffer);
   const { dict } = DicomMessage.readFile(byteArray);
 
   // ROI Contour Sequence (3006,0039) - contains Contour Data with Referenced ROI Number
