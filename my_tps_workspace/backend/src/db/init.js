@@ -45,6 +45,7 @@ function initializeSchema(db) {
   addColumnIfMissing(db, 'ebrt_plans', 'primary_point_name', 'TEXT');
   addColumnIfMissing(db, 'ebrt_plans', 'calc_models_json', 'TEXT');
   addColumnIfMissing(db, 'ebrt_plans', 'delta_couch_json', 'TEXT');
+  addColumnIfMissing(db, 'ebrt_plans', 'optimization_objectives_json', 'TEXT');
 }
 
 function addColumnIfMissing(db, table, column, definition) {

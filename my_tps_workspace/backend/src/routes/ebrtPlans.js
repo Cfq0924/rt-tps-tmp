@@ -312,6 +312,20 @@ router.delete('/beams/:beamId/subfields/:subfieldId', authMiddleware, (req, res,
   }
 });
 
+// GET /ebrt/plans/:planId/isocenter-suggestion — target centroid (Set Isocenter helper)
+router.get('/plans/:planId/isocenter-suggestion', authMiddleware, async (req, res, next) => {
+  try {
+    const plan = getPlan({ id: parseInt(req.params.planId, 10), userId: req.user.userId, reqId: req.id });
+    if (!plan.targetStructureName) {
+      return res.json({ suggestion: null, reason: 'plan has no target structure set' });
+    }
+    const suggestion = await computeTargetIsocenter(plan.studyId, plan.targetStructureName);
+    res.json({ suggestion, structureName: plan.targetStructureName });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /ebrt/plans/:planId/point-doses — reference point dose report
 router.get('/plans/:planId/point-doses', authMiddleware, async (req, res, next) => {
   try {

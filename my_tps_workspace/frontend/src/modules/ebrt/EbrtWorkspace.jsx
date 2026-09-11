@@ -1,14 +1,16 @@
 import { Box, Typography, TextField, MenuItem, Button, Table, TableBody, TableCell,
+  Dialog, DialogTitle, DialogContent, DialogActions, Alert as MuiAlert,
   TableHead, TableRow, IconButton, Switch, Chip, Tooltip, Alert, Slider } from '@mui/material';
 import {
   Add, Delete, CloudDownload, Settings, BookmarkAdded, Bookmark, GppGood, RateReview,
-  CallSplit, ContentCopy, Hotel, History, FactCheck, Straighten, Calculate,
+  CallSplit, ContentCopy, Hotel, History, FactCheck, Straighten, Calculate, MyLocation,
 } from '@mui/icons-material';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { MACHINES, DOSE_ALGORITHMS, OPTIMIZATION_ALGORITHMS, NORMALIZATIONS, getMachine } from '../../lib/machines.js';
 import PeerReviewPanel from './PeerReviewPanel.jsx';
 import MlcLeafEditor from './MlcLeafEditor.jsx';
 import SubfieldEditor from './SubfieldEditor.jsx';
+import OptimizationPanel from './OptimizationPanel.jsx';
 
 const numOrNull = (v) => {
   const n = Number(v);
@@ -28,7 +30,10 @@ const NEXT_APPROVAL = { UNAPPROVED: 'REVIEWED', REVIEWED: 'APPROVED' };
  * @param {Object} props.ebrt - useEbrtPlans() hook result
  * @param {number|null} props.rtPlanFileId - imported RTPLAN file id (for import)
  */
-export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSliceIdx, onJumpToSlice }) {
+export default function EbrtWorkspace({
+  studyId, ebrt, rtPlanFileId, currentSliceIdx, onJumpToSlice,
+  structures = [], dvhResults = [], onLoadDose = null, doseLoading = false,
+}) {
   const { plans, selectedPlan, selectedPlanId, setSelectedPlanId, selectPlan } = ebrt;
   const [showNewPlan, setShowNewPlan] = useState(plans.length === 0);
   const [formError, setFormError] = useState('');
@@ -70,6 +75,8 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
     ebrt.refreshCourses?.().catch(() => {});
   }, []);
 
+
+
   // backend wiring state (B2–B6)
   const [selectedBeamId, setSelectedBeamId] = useState(null);
   const [normMode, setNormMode] = useState('ISOCENTER');
@@ -81,6 +88,24 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
   const [showRevisions, setShowRevisions] = useState(false);
   const [doseBusy, setDoseBusy] = useState(false);
   const [normBusy, setNormBusy] = useState(false);
+  // workflow (Eclipse EBPT flow): isocenter / Rx quick-edit / calc elapsed+engine
+  const [isoDialogOpen, setIsoDialogOpen] = useState(false);
+  const [isoDraft, setIsoDraft] = useState({ x: '', y: '', z: '' });
+  const [isoBusy, setIsoBusy] = useState(false);
+  const [mlcInitBusy, setMlcInitBusy] = useState(false);
+  const [rxDraft, setRxDraft] = useState(null);
+  const [calcEngine, setCalcEngine] = useState('v2');
+  const [calcElapsed, setCalcElapsed] = useState(null);
+  const calcStartRef = useRef(null);
+
+  // elapsed-seconds ticker while the dose calculation runs
+  useEffect(() => {
+    if (!doseBusy) return undefined;
+    const t = setInterval(() => {
+      setCalcElapsed(((Date.now() - (calcStartRef.current ?? Date.now())) / 1000).toFixed(0));
+    }, 500);
+    return () => clearInterval(t);
+  }, [doseBusy]);
   const [checks, setChecks] = useState(null);
   const [cps, setCps] = useState(null); // control points of selected beam
   const [subfields, setSubfields] = useState([]);
@@ -277,6 +302,121 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
     }
   };
 
+  // ---------- workflow S1: set isocenter ----------
+  const openIsoDialog = () => {
+    if (!selectedPlan) return;
+    setIsoDraft({
+      x: selectedPlan.isocenterX != null ? Number(selectedPlan.isocenterX.toFixed(2)) : '',
+      y: selectedPlan.isocenterY != null ? Number(selectedPlan.isocenterY.toFixed(2)) : '',
+      z: selectedPlan.isocenterZ != null ? Number(selectedPlan.isocenterZ.toFixed(2)) : '',
+    });
+    setIsoDialogOpen(true);
+  };
+
+  const useTargetCentroid = async () => {
+    if (!selectedPlan) return;
+    setIsoBusy(true);
+    try {
+      const res = await fetch(`/api/ebrt/plans/${selectedPlan.id}/isocenter-suggestion`, { credentials: 'include' });
+      const d = await res.json();
+      if (d.suggestion) {
+        setIsoDraft({
+          x: Number(d.suggestion.x.toFixed(2)),
+          y: Number(d.suggestion.y.toFixed(2)),
+          z: Number(d.suggestion.z.toFixed(2)),
+        });
+      } else {
+        setFormError(d.reason || '无靶区质心可用');
+      }
+    } catch (err) {
+      setFormError(err.message);
+    } finally {
+      setIsoBusy(false);
+    }
+  };
+
+  const saveIso = async () => {
+    if (!selectedPlan) return;
+    setIsoBusy(true);
+    setFormError('');
+    try {
+      await ebrt.updatePlan(selectedPlan.id, {
+        isocenter_x: Number(isoDraft.x),
+        isocenter_y: Number(isoDraft.y),
+        isocenter_z: Number(isoDraft.z),
+      });
+      setIsoDialogOpen(false);
+      setOpNote(`治疗中心已设置 (${isoDraft.x}, ${isoDraft.y}, ${isoDraft.z})`);
+    } catch (err) {
+      setFormError(err.message);
+    } finally {
+      setIsoBusy(false);
+    }
+  };
+
+  // ---------- workflow S2: initialize MLC control points from jaw boundaries ----------
+  const initMlcFromJaws = async () => {
+    if (!selectedBeam) return;
+    setMlcInitBusy(true);
+    setFormError('');
+    try {
+      const x1 = selectedBeam.jawX1 ?? -50, x2 = selectedBeam.jawX2 ?? 50;
+      const y1 = selectedBeam.jawY1 ?? -50, y2 = selectedBeam.jawY2 ?? 50;
+      const N = 60, W = 5;
+      const leafPairs = [];
+      for (let r = 0; r < N; r++) {
+        const yLo = -150 + r * W, yHi = yLo + W;
+        // rows overlapping [y1, y2] open across [x1, x2]; others closed
+        const overlaps = yHi > y1 && yLo < y2;
+        leafPairs.push(overlaps ? { x1, x2 } : { x1: x1, x2: x1 });
+      }
+      const controlPoints = [0, 1].map(w => ({
+        cpIndex: w,
+        cumulativeWeight: w,
+        gantryAngle: selectedBeam.gantryAngle ?? 0,
+        collimatorAngle: selectedBeam.collimatorAngle ?? 0,
+        couchAngle: selectedBeam.couchAngle ?? 0,
+        mlc: { type: 'MLCX', leafPairs },
+      }));
+      await ebrt.saveControlPoints(selectedBeam.id, controlPoints);
+      const cp = await ebrt.getControlPoints(selectedBeam.id).catch(() => []);
+      setCps(cp);
+      setDraftLeaves(null);
+      setOpNote(`已从射野边界初始化 ${cp.length} 个控制点（MLCX）`);
+    } catch (err) {
+      setFormError(err.message);
+    } finally {
+      setMlcInitBusy(false);
+    }
+  };
+
+  // ---------- workflow S3: quick prescription edit ----------
+  const openRxEdit = () => {
+    if (!selectedPlan) return;
+    setRxDraft({
+      doseGy: selectedPlan.prescriptionDoseGy ?? '',
+      fx: selectedPlan.numberOfFractions ?? '',
+    });
+  };
+
+  const saveRx = async () => {
+    if (!selectedPlan || !rxDraft) return;
+    setFormError('');
+    try {
+      const dose = numOrNull(rxDraft.doseGy);
+      const fx = numOrNull(rxDraft.fx);
+      await ebrt.updatePlan(selectedPlan.id, {
+        prescription_dose_gy: dose,
+        number_of_fractions: fx,
+        dose_per_fraction_gy: dose && fx ? dose / fx : undefined,
+      });
+      setRxDraft(null);
+      setOpNote('处方剂量已更新');
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
+
   // Reference RTDOSE for the dose engine: first RTDOSE file of the study
   // (fetched once and cached — the engine only borrows its geometry).
   const referenceDoseFileIdRef = useRef(null);
@@ -296,6 +436,8 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
     setFormError('');
     setOpNote('');
     setDoseBusy(true);
+    calcStartRef.current = Date.now();
+    setCalcElapsed(0);
     try {
       const referenceDoseFileId = await resolveReferenceDoseFileId();
       const res = await fetch(`/api/dose-engine/study/${studyId}/compute`, {
@@ -304,6 +446,7 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           planId: selectedPlan.id,
+          engine: calcEngine,
           referenceDoseFileId,
           prescriptionCgy: selectedPlan.prescriptionDoseGy != null
             ? Math.round(selectedPlan.prescriptionDoseGy * 100) : undefined,
@@ -318,6 +461,7 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
     } catch (err) {
       setFormError(err.message);
     } finally {
+      setCalcElapsed(((Date.now() - (calcStartRef.current ?? Date.now())) / 1000).toFixed(1));
       setDoseBusy(false);
     }
   };
@@ -791,6 +935,19 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
                 )}
               </Box>
 
+              {(!cps || cps.length === 0) && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Button size="small" variant="outlined" disabled={mlcInitBusy}
+                          onClick={initMlcFromJaws}
+                          sx={{ fontSize: '0.58rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                    {mlcInitBusy ? '初始化中…' : '初始化 MLC（从射野边界）'}
+                  </Button>
+                  <Typography variant="caption" sx={{ fontSize: '0.55rem', color: 'text.disabled' }}>
+                    生成 2 个控制点（MLCX，60 对叶片），之后可用叶编辑器调制
+                  </Typography>
+                </Box>
+              )}
+
               {/* MLC leaf editor for the selected control point */}
               {cps && cps.length > 0 && (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
@@ -846,6 +1003,21 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
             <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary', fontFamily: 'mono' }}>
               PLAN OPS
             </Typography>
+            {selectedPlan && (
+              <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                {[
+                  ['治疗中心', !!(selectedPlan.isocenterX || selectedPlan.isocenterY || selectedPlan.isocenterZ)],
+                  ['射野', (selectedPlan.beams ?? []).length > 0],
+                  ['MLC', (selectedPlan.beams ?? []).some(b => (b.cpCount ?? 0) > 0) || subfields.length > 0],
+                  ['处方', (selectedPlan.prescriptionDoseGy ?? 0) > 0],
+                  ['优化目标', (selectedPlan.optimizationObjectives ?? []).length > 0],
+                ].map(([label, done]) => (
+                  <Chip key={label} size="small" label={`${done ? '✓' : '·'} ${label}`}
+                        sx={{ height: 15, fontSize: '0.52rem', fontFamily: 'mono' }}
+                        color={done ? 'success' : 'default'} variant={done ? 'outlined' : 'outlined'} />
+                ))}
+              </Box>
+            )}
             <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
               <TextField size="small" select label="Normalize" value={normMode}
                          onChange={e => setNormMode(e.target.value)}
@@ -900,12 +1072,26 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
               </Tooltip>
             </Box>
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+              <Tooltip title="Set the plan isocenter (Eclipse Set Isocenter)">
+                <Button size="small" variant="outlined" startIcon={<MyLocation fontSize="small" />}
+                        onClick={openIsoDialog}
+                        sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                  治疗中心
+                </Button>
+              </Tooltip>
+              <TextField size="small" select label="Engine" value={calcEngine}
+                         onChange={e => setCalcEngine(e.target.value)}
+                         sx={{ minWidth: 92 }}
+                         inputProps={{ style: { fontSize: '0.6rem' } }}>
+                <MenuItem value="v2" sx={{ fontSize: '0.65rem' }}>v2（发散+ρ+MLC）</MenuItem>
+                <MenuItem value="v1" sx={{ fontSize: '0.65rem' }}>v1（水原型）</MenuItem>
+              </TextField>
               <Tooltip title="Calculate the plan dose on the study's dose geometry (Eclipse Dose Calculation)">
                 <Button size="small" variant="outlined" startIcon={<Calculate fontSize="small" />}
                         disabled={doseBusy}
                         onClick={handleCalculateDose}
                         sx={{ fontSize: '0.6rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
-                  {doseBusy ? 'Calculating…' : 'Calc Dose'}
+                  {doseBusy ? `计算中 ${calcElapsed ?? 0}s…` : 'Calc Dose'}
                 </Button>
               </Tooltip>
               <Tooltip title="Generate a couch structure ROI for this study (Eclipse Couch Structures)">
@@ -979,6 +1165,51 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
               </Typography>
             )}
           </Box>
+
+          {/* workflow S4: optimization objectives + prototype run + live DVH */}
+          {selectedPlan && (
+            <OptimizationPanel
+              plan={selectedPlan}
+              structures={structures}
+              dvhResults={dvhResults}
+              prescriptionCgy={selectedPlan.prescriptionDoseGy != null ? Math.round(selectedPlan.prescriptionDoseGy * 100) : null}
+              onSaveObjectives={async (objectives) => {
+                await ebrt.updatePlan(selectedPlan.id, { optimization_objectives_json: objectives });
+                await ebrt.selectPlan(selectedPlan.id);
+              }}
+              onLoadDose={() => onLoadDose?.()}
+              doseLoading={doseLoading}
+            />
+          )}
+
+          {/* workflow S3: quick prescription edit */}
+          {selectedPlan && (
+            <Box sx={{ px: 1, py: 0.75, display: 'flex', gap: 0.5, alignItems: 'center',
+                       borderTop: '1px solid rgba(88,196,220,0.12)' }}>
+              <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary', fontFamily: 'mono' }}>
+                处方
+              </Typography>
+              {rxDraft == null ? (
+                <>
+                  <Typography variant="caption" sx={{ fontSize: '0.62rem', fontFamily: 'mono' }}>
+                    {selectedPlan.prescriptionDoseGy ?? '—'} Gy / {selectedPlan.numberOfFractions ?? '—'} fx
+                  </Typography>
+                  <Button size="small" sx={{ fontSize: '0.55rem', minWidth: 0 }} onClick={openRxEdit}>编辑</Button>
+                </>
+              ) : (
+                <>
+                  <TextField size="small" label="Gy" value={rxDraft.doseGy}
+                             onChange={e => setRxDraft(d => ({ ...d, doseGy: e.target.value }))}
+                             sx={{ width: 64 }} inputProps={{ style: { fontSize: '0.62rem' } }} />
+                  <TextField size="small" label="fx" value={rxDraft.fx}
+                             onChange={e => setRxDraft(d => ({ ...d, fx: e.target.value }))}
+                             sx={{ width: 52 }} inputProps={{ style: { fontSize: '0.62rem' } }} />
+                  <Button size="small" onClick={saveRx} sx={{ fontSize: '0.55rem', minWidth: 0 }}>存</Button>
+                  <Button size="small" onClick={() => setRxDraft(null)} sx={{ fontSize: '0.55rem', minWidth: 0, color: 'text.secondary' }}>×</Button>
+                </>
+              )}
+            </Box>
+          )}
 
           {/* add beam form */}
           <Box sx={{ px: 1.5, py: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
@@ -1080,6 +1311,37 @@ export default function EbrtWorkspace({ studyId, ebrt, rtPlanFileId, currentSlic
           </Box>
         </>
       )}
+
+      {/* workflow S1: set isocenter dialog */}
+      <Dialog open={isoDialogOpen} onClose={() => !isoBusy && setIsoDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontSize: '0.9rem' }}>设置治疗中心（Isocenter）</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: 1 }}>
+          {formError && <Alert severity="error" sx={{ fontSize: '0.7rem' }}>{formError}</Alert>}
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <TextField size="small" label="x (mm)" value={isoDraft.x}
+                       onChange={e => setIsoDraft(d => ({ ...d, x: e.target.value }))}
+                       inputProps={{ style: { fontSize: '0.65rem' } }} />
+            <TextField size="small" label="y (mm)" value={isoDraft.y}
+                       onChange={e => setIsoDraft(d => ({ ...d, y: e.target.value }))}
+                       inputProps={{ style: { fontSize: '0.65rem' } }} />
+            <TextField size="small" label="z (mm)" value={isoDraft.z}
+                       onChange={e => setIsoDraft(d => ({ ...d, z: e.target.value }))}
+                       inputProps={{ style: { fontSize: '0.65rem' } }} />
+          </Box>
+          <Button size="small" variant="outlined" disabled={isoBusy || !selectedPlan?.targetStructureName}
+                  onClick={useTargetCentroid}
+                  sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+            使用靶区质心{selectedPlan?.targetStructureName ? `（${selectedPlan.targetStructureName}）` : '（未设靶区）'}
+          </Button>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setIsoDialogOpen(false)} disabled={isoBusy}>取消</Button>
+          <Button size="small" variant="contained" onClick={saveIso}
+                  disabled={isoBusy || isoDraft.x === '' || isoDraft.y === '' || isoDraft.z === ''}>
+            保存
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

@@ -1265,6 +1265,10 @@ export default function StudyViewerPage() {
               rtPlanFileId={rtPlanFileId}
               currentSliceIdx={currentImageIndex}
               onJumpToSlice={handleJumpToSlice}
+              structures={structures}
+              dvhResults={dvh.results}
+              onLoadDose={loadGrid}
+              doseLoading={gridLoading}
             />
           )}
           {activeModule === 'registration' && (

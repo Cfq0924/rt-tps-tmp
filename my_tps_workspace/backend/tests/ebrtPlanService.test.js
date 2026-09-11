@@ -78,6 +78,18 @@ describe('ebrtPlanService', () => {
     planId = plan.id;
   });
 
+  it('stores optimization objectives (workflow bridge)', () => {
+    const objectives = [
+      { structureName: 'PTV', type: 'TARGET_UPPER', dosePct: 102, volumePct: 0 },
+      { structureName: 'PTV', type: 'TARGET_LOWER', dosePct: 95, volumePct: 100 },
+      { structureName: 'Cord', type: 'MAX_DOSE', dosePct: 45, volumePct: 0 },
+    ];
+    const updated = svc.updatePlan({
+      id: planId, payload: { optimization_objectives_json: objectives }, userId: 1, reqId: 't',
+    });
+    assert.deepStrictEqual(updated.optimizationObjectives, objectives);
+  });
+
   it('rejects invalid plan payloads', () => {
     assert.throws(() => svc.createPlan({ studyId: STUDY_ID, payload: { name: '' }, userId: 1, reqId: 't' }), e => e.status === 400);
     assert.throws(() => svc.createPlan({ studyId: STUDY_ID, payload: { name: 'x', prescription_dose_gy: -1, number_of_fractions: 1 }, userId: 1, reqId: 't' }), e => e.status === 400);

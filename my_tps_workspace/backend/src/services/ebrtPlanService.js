@@ -142,6 +142,7 @@ const PLAN_SELECT = `
          course_id as courseId, target_structure_name as targetStructureName,
          dose_per_fraction_gy as dosePerFractionGy, primary_point_name as primaryPointName,
          calc_models_json as calcModelsJson, delta_couch_json as deltaCouchJson,
+         optimization_objectives_json as optimizationObjectivesJson,
          source_rtplan_file_id as sourceRtplanFileId, created_at as createdAt
   FROM ebrt_plans`;
 
@@ -158,6 +159,8 @@ function getPlanWithBeams(db, id) {
   plan.referencePoints = parseReferencePoints(plan.referencePointsJson);
   plan.calcModels = parseJsonField(plan.calcModelsJson);
   plan.deltaCouch = parseJsonField(plan.deltaCouchJson);
+  plan.optimizationObjectives = parseJsonField(plan.optimizationObjectivesJson);
+  plan.optimizationObjectivesJson = undefined;
   plan.calcModelsJson = undefined;
   plan.deltaCouchJson = undefined;
   delete plan.referencePointsJson;
@@ -166,7 +169,8 @@ function getPlanWithBeams(db, id) {
            energy_mv as energyMv, gantry_angle as gantryAngle, gantry_angle_stop as gantryAngleStop,
            collimator_angle as collimatorAngle, couch_angle as couchAngle,
            jaw_x1 as jawX1, jaw_x2 as jawX2, jaw_y1 as jawY1, jaw_y2 as jawY2, weight,
-           wedge_angle as wedgeAngle, bolus
+           wedge_angle as wedgeAngle, bolus,
+           (SELECT COUNT(*) FROM beam_control_points bc WHERE bc.beam_id = ebrt_beams.id) as cpCount
     FROM ebrt_beams WHERE plan_id = ? ORDER BY beam_number
   `).all(id);
   return plan;
@@ -256,6 +260,7 @@ const UPDATABLE_PLAN_FIELDS = new Set([
   'heterogeneity_correction', 'approval_status', 'isocenter_x', 'isocenter_y', 'isocenter_z',
   'reference_points', 'course_id', 'target_structure_name', 'dose_per_fraction_gy',
   'primary_point_name', 'calc_models_json', 'delta_couch_json',
+  'optimization_objectives_json',
 ]);
 
 export function updatePlan({ id, payload = {}, userId, reqId }) {
@@ -289,7 +294,7 @@ export function updatePlan({ id, payload = {}, userId, reqId }) {
       values.push(refPts.value);
       continue;
     }
-    if (k === 'calc_models_json' || k === 'delta_couch_json') {
+    if (k === 'calc_models_json' || k === 'delta_couch_json' || k === 'optimization_objectives_json') {
       // structured JSON fields: validate shapes, store the canonical form
       const parsed = parseJsonField(typeof v === 'string' ? v : JSON.stringify(v));
       if (parsed == null && v != null) throw Object.assign(new Error(`${k} must be valid JSON`), { status: 400 });

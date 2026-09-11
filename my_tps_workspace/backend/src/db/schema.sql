@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS ebrt_plans (
   primary_point_name TEXT,
   calc_models_json TEXT,
   delta_couch_json TEXT,
+  optimization_objectives_json TEXT,
   source_rtplan_file_id INTEGER REFERENCES dicom_files(id),
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
