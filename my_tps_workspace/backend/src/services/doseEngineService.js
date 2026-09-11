@@ -1,6 +1,7 @@
 import { readFileSync, mkdirSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
+import { huToRho, tpr as tprV2, tprParams, beamAxes, integratedFluence, projectToBEV, inverseSquare } from './doseV2Math.js';
 import dcmjs from 'dcmjs';
 import { getDb } from '../db/init.js';
 import { auditLog } from '../logging/index.js';
@@ -274,6 +275,213 @@ export async function computeWaterDose({ studyId, referenceDoseFileId, planId, p
   return { grid: total, geometry, beams: beamInfo, normalisation, isocenter: iso };
 }
 
+
+/**
+ * Phase 4 M2 — engine v2. Upgrades over computeWaterDose (v1):
+ *   - HU → ρ piecewise-linear calibration (instead of the binary water mask)
+ *   - ρ-weighted radiological depth (air cavities no longer reset the path)
+ *   - exact inverse-square from the virtual source at SAD
+ *   - MLC control points → BEV fluence integrated over meterset weights
+ *     (beams without control points fall back to the jaw-defined open field)
+ *   - TPR table per beam energy (6MV / 10MV)
+ * Depth rays remain the per-slice in-plane sweep (parallel-ray approximation
+ * for the radiological path; divergence is applied via the source geometry).
+ */
+export async function computeWaterDoseV2({ studyId, referenceDoseFileId, planId, prescriptionCgy, mlc = true, userId = null, reqId = null }) {
+  const db = getDb();
+  const reference = await getDoseGrid(referenceDoseFileId, {}, reqId);
+  const plan = getPlan({ id: planId, userId, reqId });
+  if (!plan.beams?.length) {
+    throw Object.assign(new Error('Plan has no beams to calculate'), { status: 400 });
+  }
+  const iso = { x: plan.isocenterX ?? 0, y: plan.isocenterY ?? 0, z: plan.isocenterZ ?? 0 };
+  const SAD = 1000;
+
+  const { rows, columns, numberOfFrames, imagePosition, pixelSpacing, gridFrameOffsetVector } = reference;
+
+  const ctFiles = db.prepare(`
+    SELECT id, file_path, image_position_x, image_position_y, image_position_z, pixel_spacing_x, pixel_spacing_y, rows, columns
+    FROM dicom_files WHERE study_id = ? AND modality = 'CT'
+    ORDER BY image_position_z
+  `).all(studyId);
+  if (ctFiles.length === 0) {
+    throw Object.assign(new Error('Study has no CT series'), { status: 400 });
+  }
+  const ctSlices = ctFiles.map(f => ({
+    z: f.image_position_z,
+    ...parseCTHU(f.file_path),
+    imagePosition: { x: f.image_position_x ?? 0, y: f.image_position_y ?? 0, z: f.image_position_z ?? 0 },
+    spacingX: f.pixel_spacing_y ?? 1,
+    spacingY: f.pixel_spacing_x ?? 1,
+  }));
+
+  const voxelZ = (k) => imagePosition.z + (gridFrameOffsetVector[k] ?? 0);
+  const nearestSlice = (z) => ctSlices.reduce((best, s) =>
+    (Math.abs(s.z - z) < Math.abs(best.z - z) ? s : best), ctSlices[0]);
+
+  // control points per beam (for MLC modulation)
+  const cpStmt = db.prepare(`
+    SELECT cp_index, cumulative_meterset_weight, mlc_json
+    FROM beam_control_points WHERE beam_id = ? ORDER BY cp_index
+  `);
+  const controlPointsFor = (beamId) => cpStmt.all(beamId)
+    .filter(r => r.mlc_json)
+    .map(r => ({
+      cumulativeWeight: Number(r.cumulative_meterset_weight) || 0,
+      leafPairs: JSON.parse(r.mlc_json).leafPairs ?? [],
+    }));
+
+  const total = new Float32Array(rows * columns * numberOfFrames);
+  const beamInfo = [];
+
+  for (const beam of plan.beams) {
+    const gantry = beam.gantryAngle ?? 0;
+    const axes = beamAxes(gantry);
+    const source = [iso.x - SAD * axes.dir[0], iso.y - SAD * axes.dir[1], iso.z - SAD * axes.dir[2]];
+    const halfY = (beam.jawY2 != null && beam.jawY1 != null) ? (beam.jawY2 - beam.jawY1) / 2 : 60;
+    const weight = beam.weight ?? 1;
+    const energyKey = beam.energyMv ?? 6;
+    const tp = tprParams(energyKey);
+    const cps = mlc ? controlPointsFor(beam.id) : [];
+  
+    // ρ per CT slice (loaded once per beam — slices are beam-independent,
+    // but the ρ conversion is cheap enough to repeat for clarity)
+    const sliceRho = ctSlices.map(s => {
+      const rho = new Float32Array(s.hu.length);
+      for (let i = 0; i < s.hu.length; i++) rho[i] = huToRho(s.hu[i]);
+      return { ...s, rho };
+    });
+
+    // radiological depth: same in-plane ray sweep as v1, ρ-weighted, no air
+    // reset (internal cavities attenuate by their near-zero ρ)
+    const beamGrid = new Float32Array(total.length);
+    for (let k = 0; k < numberOfFrames; k++) {
+      const z = voxelZ(k);
+      const slice = nearestSlice(z);
+      const ipp = slice.imagePosition;
+      const sx = slice.spacingX, sy = slice.spacingY;
+      const depth = computeDepthMapV2(sliceRho.find(s => s.z === slice.z).rho, slice.cols, slice.rows, ipp.x, ipp.y, sx, sy, axes.dir[0], axes.dir[1]);
+
+      const off0 = k * rows * columns;
+      for (let j = 0; j < rows; j++) {
+        const py = imagePosition.y + j * pixelSpacing.i;
+        for (let i = 0; i < columns; i++) {
+          const pxx = imagePosition.x + i * pixelSpacing.j;
+          const ci = Math.round((pxx - ipp.x) / sx);
+          const cj = Math.round((py - ipp.y) / sy);
+          if (ci < 0 || ci >= slice.cols || cj < 0 || cj >= slice.rows) continue;
+          const dv = depth[cj * slice.cols + ci];
+          if (dv <= 0) continue;
+          const bev = projectToBEV([pxx, py, z], source, SAD, axes);
+          if (!bev) continue;
+          const flu = integratedFluence(bev.x, bev.y, cps);
+          if (flu <= 0.001) continue;
+          // out-of-field Y cut (jaws) at the BEV projection
+          if (Math.abs(bev.y) > halfY) continue;
+          const tprV = tprV2(dv / 10, tp);
+          const isf = inverseSquare(bev.distFromSource, SAD);
+          beamGrid[off0 + j * columns + i] = weight * tprV * flu * isf;
+        }
+      }
+    }
+    for (let i = 0; i < total.length; i++) total[i] += beamGrid[i];
+    beamInfo.push({
+      beamNumber: beam.beamNumber, gantryAngle: gantry, weight, energyMv: energyKey,
+      controlPoints: cps.length,
+    });
+  }
+
+  // calculation volume crop + isocentre normalisation — same as v1
+  const cv = plan.calcModels?.volumeDose?.calcVolume;
+  if (cv && typeof cv === 'object') {
+    const bx = [cv.x1, cv.x2], by = [cv.y1, cv.y2], bz = [cv.z1, cv.z2];
+    for (let k = 0; k < numberOfFrames; k++) {
+      const z = voxelZ(k);
+      for (let j = 0; j < rows; j++) {
+        const y = imagePosition.y + j * pixelSpacing.i;
+        if (y < Math.min(...by) || y > Math.max(...by)) {
+          total.fill(0, k * rows * columns + j * columns, k * rows * columns + (j + 1) * columns);
+          continue;
+        }
+        for (let i = 0; i < columns; i++) {
+          const x = imagePosition.x + i * pixelSpacing.j;
+          if (x < Math.min(...bx) || x > Math.max(...bx)) {
+            total[k * rows * columns + j * columns + i] = 0;
+          }
+        }
+      }
+    }
+    for (let k = 0; k < numberOfFrames; k++) {
+      const z = voxelZ(k);
+      if (z < Math.min(...bz) || z > Math.max(...bz)) {
+        total.fill(0, k * rows * columns, (k + 1) * rows * columns);
+      }
+    }
+  }
+
+  let normalisation = { strategy: 'none', factor: 1 };
+  if (prescriptionCgy > 0) {
+    const kIso = numberOfFrames > 1
+      ? gridFrameOffsetVector.reduce((best, off, k) => (Math.abs(imagePosition.z + off - iso.z) < Math.abs(imagePosition.z + gridFrameOffsetVector[best] - iso.z) ? k : best), 0)
+      : 0;
+    const slice = nearestSlice(iso.z);
+    const isoI = Math.round((iso.x - slice.imagePosition.x) / slice.spacingX);
+    const isoJ = Math.round((iso.y - slice.imagePosition.y) / slice.spacingY);
+    const isoIdx = kIso * rows * columns + isoJ * columns + isoI;
+    const isoDose = total[isoIdx] > 0 ? total[isoIdx] : findMax(total);
+    const strategy = total[isoIdx] > 0 ? 'isocentre' : 'max';
+    const factor = prescriptionCgy / isoDose;
+    for (let i = 0; i < total.length; i++) total[i] *= factor;
+    normalisation = { strategy, factor, isocenterVoxelDose: isoDose };
+  }
+
+  const geometry = {
+    rows, columns, numberOfFrames,
+    imagePosition,
+    imageOrientation: reference.imageOrientation,
+    pixelSpacing: reference.pixelSpacing,
+    gridFrameOffsetVector,
+  };
+  return { grid: total, geometry, beams: beamInfo, normalisation, isocenter: iso, engine: 'v2' };
+}
+
+/**
+ * ρ-weighted radiological depth map (v2): accumulates ρ·step along each ray
+ * line without the v1 air reset — the entry surface is implicit in the
+ * near-zero ρ of air and the build-up ramp of the TPR.
+ */
+export function computeDepthMapV2(rhoRowMajor, cols, rows, ippX, ippY, spacingX, spacingY, dirX, dirY) {
+  const depth = new Float32Array(cols * rows);
+  const len = Math.hypot(dirX, dirY);
+  const ux = dirX / len, uy = dirY / len;
+  const px = -uy, py = ux;
+  const step = 1.0;
+  const extent = cols * Math.abs(spacingX) + rows * Math.abs(spacingY);
+  const nLines = Math.ceil(extent / 2) + 4;
+  for (let li = -nLines / 2; li < nLines / 2; li++) {
+    const sxp = ippX + cols * spacingX / 2 + px * li;
+    const syp = ippY + rows * spacingY / 2 + py * li;
+    let acc = 0;
+    let t = -extent;
+    while (t < extent) {
+      const x = sxp + ux * t;
+      const y = syp + uy * t;
+      const i = Math.round((x - ippX) / spacingX);
+      const j = Math.round((y - ippY) / spacingY);
+      if (i >= 0 && i < cols && j >= 0 && j < rows) {
+        const idx = j * cols + i;
+        const rho = rhoRowMajor[idx];
+        if (rho > 0.01) {
+          if (depth[idx] === 0) depth[idx] = acc + step / 2;
+          acc += rho * step;
+        }
+      }
+      t += step;
+    }
+  }
+  return depth;
+}
+
 function findMax(grid) {
   let m = 0;
   for (let i = 0; i < grid.length; i++) if (grid[i] > m) m = grid[i];
@@ -311,9 +519,10 @@ function patientLevel(study) {
  * Compute the water-equivalent dose and store it as a derived RTDOSE file
  * (DoseType CALCULATED, DoseSummationType PLAN) registered in dicom_files.
  */
-export async function computeAndStoreDose({ studyId, referenceDoseFileId, planId, prescriptionCgy, userId = null, reqId = null }) {
+export async function computeAndStoreDose({ studyId, referenceDoseFileId, planId, prescriptionCgy, engine = 'v2', userId = null, reqId = null }) {
   const db = getDb();
-  const { grid, geometry, beams, normalisation, isocenter } = await computeWaterDose({
+  const calculator = engine === 'v1' ? computeWaterDose : computeWaterDoseV2;
+  const { grid, geometry, beams, normalisation, isocenter } = await calculator({
     studyId, referenceDoseFileId, planId, prescriptionCgy, userId, reqId,
   });
   const study = loadStudyMeta(db, studyId);
@@ -394,6 +603,7 @@ export async function computeAndStoreDose({ studyId, referenceDoseFileId, planId
 
   return {
     doseFileId: fileInfo.lastInsertRowid,
+    engine,
     maxDoseCgy: maxCgy,
     beams: beams.length,
     normalisation,

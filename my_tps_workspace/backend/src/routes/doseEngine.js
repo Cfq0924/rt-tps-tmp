@@ -15,6 +15,7 @@ router.post('/study/:studyId/compute', authMiddleware, async (req, res, next) =>
       referenceDoseFileId: parseInt(req.body?.referenceDoseFileId, 10),
       planId: parseInt(req.body?.planId, 10),
       prescriptionCgy: req.body?.prescriptionCgy != null ? Number(req.body.prescriptionCgy) : undefined,
+      engine: req.body?.engine === 'v1' ? 'v1' : 'v2',
       userId: req.user.userId,
       reqId: req.id,
     });

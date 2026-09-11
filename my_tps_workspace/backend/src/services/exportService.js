@@ -337,7 +337,8 @@ export function buildRTPlanDataset({ study, plan, seriesUid, sopInstanceUid, dat
     if (cp.mlc) {
       devices.push({
         RTBeamLimitingDeviceType: cp.mlc.type ?? 'MLCX',
-        LeafJawPositions: cp.mlc.leafPairs.flatMap(p => [p.x1, p.x2]),
+        // PS3.3 C.8.8.20: bank-sequential order [A1..An, B1..Bn]
+        LeafJawPositions: cp.mlc.leafPairs.flatMap(p => [p.x1]).concat(cp.mlc.leafPairs.map(p => p.x2)),
       });
     }
     return devices;

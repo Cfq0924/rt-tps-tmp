@@ -75,10 +75,13 @@ function extractMLC(controlPoint) {
     const type = str(dev.RTBeamLimitingDeviceType);
     if (type !== 'MLCX' && type !== 'MLCY') continue;
     const pos = dev.LeafJawPositions ?? dev.BeamLimitingDevicePosition;
-    if (!Array.isArray(pos) || pos.length < 2) continue;
+    if (!Array.isArray(pos) || pos.length < 2 || pos.length % 2 !== 0) continue;
+    // PS3.3 C.8.8.20: LeafJawPositions holds bank 1 (leaves 1..N) followed by
+    // bank 2 (leaves 1..N) — pair leaf j of bank 1 with leaf j of bank 2.
+    const n = pos.length / 2;
     const leafPairs = [];
-    for (let i = 0; i + 1 < pos.length; i += 2) {
-      leafPairs.push({ x1: num(pos[i]), x2: num(pos[i + 1]) });
+    for (let i = 0; i < n; i++) {
+      leafPairs.push({ x1: num(pos[i]), x2: num(pos[i + n]) });
     }
     return { type, leafPairs };
   }
