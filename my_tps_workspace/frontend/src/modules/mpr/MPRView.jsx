@@ -9,6 +9,7 @@ import {
   sliceSpacing,
 } from '../../lib/mprVolume.js';
 import { trilinearSample } from '../../lib/doseSampling.js';
+import { structurePlaneSegments } from '../../lib/contourPlaneIntersection.js';
 
 /**
  * MPRView - one orthogonal plane (coronal | sagittal) rendered from the
@@ -45,6 +46,7 @@ export default function MPRView({
   wl = { wc: 40, ww: 400 },
   masterViewport = null,
   iso = null,
+  structureLines = [],
 }) {
   const canvasRef = useRef(null);
   const { volume, geom } = volumeState ?? {};
@@ -182,6 +184,26 @@ export default function MPRView({
       if (doseCanvas) ctx.drawImage(doseCanvas, 0, 0);
       ctx.restore();
 
+      // RTSTRUCT silhouette lines: polygon ∩ plane, drawn in device space
+      if (structureLines.length > 0) {
+        const planeValue = isCoronal
+          ? geom.originY + crosshair.yIdx * geom.spacingY
+          : geom.originX + crosshair.xIdx * geom.spacingX;
+        ctx.lineWidth = 1;
+        for (const s of structureLines) {
+          const segs = structurePlaneSegments(s.polygons, orientation, isCoronal ? crosshair.yIdx : crosshair.xIdx, geom);
+          if (segs.length === 0) continue;
+          const [r, g, b] = s.color;
+          ctx.strokeStyle = `rgba(${r},${g},${b},0.9)`;
+          ctx.beginPath();
+          for (const seg of segs) {
+            ctx.moveTo(vt.a * seg.a[0] + vt.e, vt.d * seg.a[1] + vt.f);
+            ctx.lineTo(vt.a * seg.b[0] + vt.e, vt.d * seg.b[1] + vt.f);
+          }
+          ctx.stroke();
+        }
+      }
+
       // crosshair reference lines (canvas-space via the affine)
       const cxLine = vt.a * (isCoronal ? crosshair.xIdx : crosshair.yIdx) + vt.e;
       const cyLine = vt.d * sliceIdx + vt.f;
@@ -221,7 +243,7 @@ export default function MPRView({
       ro.disconnect();
       el?.removeEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCam);
     };
-  }, [sample, geom, isCoronal, crosshair.xIdx, crosshair.yIdx, sliceIdx, dose, wl.wc, wl.ww, volumeState, masterViewport, iso]);
+  }, [sample, geom, isCoronal, crosshair.xIdx, crosshair.yIdx, sliceIdx, dose, wl.wc, wl.ww, volumeState, masterViewport, iso, structureLines]);
 
   /** canvas px → plane cell + slice row, via the same affine (inverse) */
   const handlePointer = (e) => {

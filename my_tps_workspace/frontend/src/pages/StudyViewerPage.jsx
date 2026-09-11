@@ -100,10 +100,23 @@ export default function StudyViewerPage() {
 
   // RT Dose state (metadata fetched per fileId; grid loaded lazily on toggle)
   const [rtDoseFileId, setRtDoseFileId] = useState(null);
-  const [doseVisible, setDoseVisible] = useState(false);
-  const [doseOpacity, setDoseOpacity] = useState(0.5);
-  const [doseThreshold, setDoseThreshold] = useState(20);
-  const [isodoseLevels, setIsodoseLevels] = useState(DEFAULT_ISODOSE_LEVELS);
+  // P4-M4: dose display preferences persist per study (localStorage)
+  const doseDisplayKey = `tps:dose-display:${studyId}`;
+  const loadDoseDisplay = () => {
+    try { return JSON.parse(localStorage.getItem(doseDisplayKey)) ?? {}; } catch { return {}; }
+  };
+  const savedDoseDisplay = loadDoseDisplay();
+  const [doseVisible, setDoseVisible] = useState(savedDoseDisplay.visible ?? false);
+  const [doseOpacity, setDoseOpacity] = useState(savedDoseDisplay.opacity ?? 0.5);
+  const [doseThreshold, setDoseThreshold] = useState(savedDoseDisplay.threshold ?? 20);
+  const [isodoseLevels, setIsodoseLevels] = useState(savedDoseDisplay.levels ?? DEFAULT_ISODOSE_LEVELS);
+  useEffect(() => {
+    try {
+      localStorage.setItem(doseDisplayKey, JSON.stringify({
+        visible: doseVisible, opacity: doseOpacity, threshold: doseThreshold, levels: isodoseLevels,
+      }));
+    } catch { /* storage unavailable — preferences stay session-only */ }
+  }, [doseDisplayKey, doseVisible, doseOpacity, doseThreshold, isodoseLevels]);
   const [exportMenuAnchor, setExportMenuAnchor] = useState(null);
   // P3-M2 registration: moving series + current transform (overlay)
   const [movingState, setMovingState] = useState({ movingUid: '', files: null, movingIndex: 0, matrix: null });
@@ -279,6 +292,21 @@ export default function StudyViewerPage() {
     if (activeModality !== 'CT' || !selectedFileId) return null;
     return filesForModality.find(f => f.id === selectedFileId) || null;
   }, [activeModality, selectedFileId, filesForModality]);
+
+  // P4-M4: visible RTSTRUCT polygons for coronal/sagittal silhouette lines
+  const structureOverlayPolygons = useMemo(() => {
+    if (structures.length === 0 || contours.length === 0) return [];
+    return structures
+      .filter(s => structureVisibility[s.roiNumber] !== false)
+      .map(s => {
+        const polys = contours
+          .filter(c => c.referencedROINumber === s.roiNumber)
+          .map(c => c.contourData);
+        const c = s.displayColor ?? { r: 255, g: 255, b: 255 };
+        return { color: [c.r ?? 255, c.g ?? 255, c.b ?? 255], polygons: polys };
+      })
+      .filter(s => s.polygons.length > 0);
+  }, [structures, structureVisibility, contours]);
 
   // Filter contours for current slice when slice changes
   useEffect(() => {
@@ -1032,6 +1060,7 @@ export default function StudyViewerPage() {
               dose={mprDoseProps}
               masterViewport={viewportInstance}
               iso={mprIso}
+              structureLines={structureOverlayPolygons}
             />
           </Box>
         )}
@@ -1047,6 +1076,7 @@ export default function StudyViewerPage() {
               dose={mprDoseProps}
               masterViewport={viewportInstance}
               iso={mprIso}
+              structureLines={structureOverlayPolygons}
             />
           </Box>
         )}
@@ -1076,6 +1106,7 @@ export default function StudyViewerPage() {
                 dose={mprDoseProps}
                 masterViewport={viewportInstance}
                 iso={mprIso}
+                structureLines={structureOverlayPolygons}
               />
               {mprState.geom && (
                 <MPRContourLayer
@@ -1112,6 +1143,7 @@ export default function StudyViewerPage() {
                 dose={mprDoseProps}
                 masterViewport={viewportInstance}
                 iso={mprIso}
+                structureLines={structureOverlayPolygons}
               />
               {mprState.geom && (
                 <MPRContourLayer
