@@ -7,7 +7,8 @@ import { MergeType } from '@mui/icons-material';
  *
  * Lists the study's RTDOSE files (imports + derived sums) so the viewer can
  * switch which grid feeds the dose overlay / DVH / point dose, and creates
- * sums by voxel-wise addition of two or more same-geometry dose files.
+ * sums by voxel-wise addition of two or more dose files; differing
+ * geometries are trilinearly resampled onto the first grid (Phase 4 M1).
  *
  * @param {Object} props
  * @param {number} props.studyId
@@ -102,7 +103,7 @@ export default function PlanSums({ studyId, doseFiles = [], activeDoseFileId, on
         PLAN SUMS
       </Typography>
       <Typography variant="caption" sx={{ display: 'block', fontSize: '0.55rem', color: 'text.disabled', mt: 0.25 }}>
-        Add two or more same-geometry dose files into a derived MULTI_PLAN dose.
+        Add two or more dose files into a derived MULTI_PLAN dose. Differing geometries are resampled onto the first grid.
       </Typography>
 
       {error && <Typography variant="caption" color="error" sx={{ fontSize: '0.6rem' }}>{error}</Typography>}

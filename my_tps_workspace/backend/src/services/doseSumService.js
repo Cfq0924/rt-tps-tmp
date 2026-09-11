@@ -12,15 +12,68 @@ const { datasetToBuffer } = dcmjs.data;
 const RTDOSE_SOP_CLASS = '1.2.840.10008.5.1.4.1.481.2';
 
 /**
- * Plan sums (Eclipse Ch4.16): voxel-wise addition of two or more dose grids
- * with identical geometry, written out as a derived RTDOSE file
- * (DoseSummationType MULTI_PLAN) that is registered in dicom_files — so it
- * displays, feeds DVH, and exports like any other dose file.
+ * Plan sums (Eclipse Ch4.16): voxel-wise addition of two or more dose grids,
+ * written out as a derived RTDOSE file (DoseSummationType MULTI_PLAN) that is
+ * registered in dicom_files — so it displays, feeds DVH, and exports like any
+ * other dose file.
  *
- * Phase 3 scope: same geometry only. Registered (resampled) sums are Phase 4.
+ * Phase 4 M1: grids with differing geometry are trilinearly resampled onto
+ * the first input's grid (outside-source voxels contribute 0).
  */
 
 const GEOM_EPS = 1e-3; // mm
+
+/**
+ * Trilinearly resample a dose grid onto another geometry (axial HFS).
+ * Voxels outside the source grid become 0 cGy (no dose information).
+ * Pure function — exported for unit tests.
+ * @param {Object} src - getDoseGrid entry {grid, rows, columns, imagePosition, pixelSpacing, gridFrameOffsetVector}
+ * @param {Object} dstMeta - target geometry (same shape)
+ * @returns {Float32Array} dst-geometry dose grid (cGy)
+ */
+export function resampleDoseGrid(src, dstMeta) {
+  const gfov = src.gridFrameOffsetVector;
+  const zLast = gfov[gfov.length - 1];
+  const dst = new Float32Array(dstMeta.rows * dstMeta.columns * dstMeta.numberOfFrames);
+  const zLo = Math.min(gfov[0], zLast) - 1e-6;
+  const zHi = Math.max(gfov[0], zLast) + 1e-6;
+  const sample = (kk, ii, jj) => src.grid[kk * src.rows * src.columns + jj * src.columns + ii];
+  for (let k = 0; k < dstMeta.numberOfFrames; k++) {
+    const zOff = (dstMeta.imagePosition.z + (dstMeta.gridFrameOffsetVector[k] ?? 0)) - src.imagePosition.z;
+    if (zOff < zLo || zOff > zHi) continue;
+    let k0 = 0;
+    while (k0 + 1 < gfov.length && gfov[k0 + 1] < zOff) k0++;
+    const k1 = Math.min(k0 + 1, gfov.length - 1);
+    const zSpan = gfov[k1] - gfov[k0];
+    const tz = zSpan > 0 ? (zOff - gfov[k0]) / zSpan : 0;
+    for (let j = 0; j < dstMeta.rows; j++) {
+      const y = dstMeta.imagePosition.y + j * dstMeta.pixelSpacing.i;
+      const sj = (y - src.imagePosition.y) / src.pixelSpacing.i;
+      if (sj < 0 || sj > src.rows - 1) continue;
+      const j0 = Math.floor(sj), j1 = Math.min(j0 + 1, src.rows - 1);
+      const fj = sj - j0;
+      for (let i = 0; i < dstMeta.columns; i++) {
+        const x = dstMeta.imagePosition.x + i * dstMeta.pixelSpacing.j;
+        const si = (x - src.imagePosition.x) / src.pixelSpacing.j;
+        if (si < 0 || si > src.columns - 1) continue;
+        const i0 = Math.floor(si), i1 = Math.min(i0 + 1, src.columns - 1);
+        const fi = si - i0;
+        const v000 = sample(k0, i0, j0), v100 = sample(k1, i0, j0);
+        const v010 = sample(k0, i1, j0), v110 = sample(k1, i1, j0);
+        const v001 = sample(k0, i0, j1), v101 = sample(k1, i0, j1);
+        const v011 = sample(k0, i1, j1), v111 = sample(k1, i1, j1);
+        const lerp = (a, b, t) => a + (b - a) * t;
+        const v = lerp(
+          lerp(lerp(v000, v010, fi), lerp(v001, v011, fi), fj),
+          lerp(lerp(v100, v110, fi), lerp(v101, v111, fi), fj),
+          tz,
+        );
+        dst[(k * dstMeta.rows + j) * dstMeta.columns + i] = v;
+      }
+    }
+  }
+  return dst;
+}
 
 function geometryKey(g) {
   return JSON.stringify([
@@ -48,25 +101,24 @@ export async function createDoseSum({ studyId, doseFileIds, name, userId, reqId 
     throw Object.assign(new Error('name is required'), { status: 400 });
   }
 
-  // load + validate geometry (identical, within tolerance)
-  const grids = [];
+  // load grids; inputs with differing geometry are trilinearly resampled
+  // onto the first input's grid (M1 cross-geometry sums)
   let reference = null;
+  const grids = [];
   for (const fileId of doseFileIds) {
     const grid = await getDoseGrid(fileId, {}, reqId);
     if (reference == null) reference = grid;
-    if (geometryKey(grid) !== geometryKey(reference)) {
-      throw Object.assign(
-        new Error('Dose grids have different geometry — registered sums are not supported yet'),
-        { status: 400 },
-      );
-    }
-    grids.push(grid);
+    grids.push(
+      geometryKey(grid) === geometryKey(reference)
+        ? grid.grid
+        : resampleDoseGrid(grid, reference),
+    );
   }
 
   // voxel-wise sum in cGy (Float64 accumulation via Number math, stored Float32)
   const sum = new Float32Array(reference.grid.length);
   for (const g of grids) {
-    for (let i = 0; i < sum.length; i++) sum[i] += g.grid[i];
+    for (let i = 0; i < sum.length; i++) sum[i] += g[i];
   }
 
   // encode as signed 32-bit pixel data with a fixed 1e-5 Gy (= 0.001 cGy)

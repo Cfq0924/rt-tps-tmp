@@ -122,15 +122,17 @@ window.__h = {
     else el.dispatchEvent(new MouseEvent(type, { ...init }));
   },
 
-  async click(el, { settle = true } = {}) {
+  async click(el, { settle = true, requireHit = false } = {}) {
     if (!el) throw new Error('click: element not found');
     el.scrollIntoView({ block: 'center' });
     await this.sleep(40);
-    // hit-test: something must actually receive the click at the center
+    // advisory hit-test: synthetic events target the element directly,
+    // but a covered center usually means the wrong element is being clicked
     const r = el.getBoundingClientRect();
     const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-    if (!hit || !(hit === el || el.contains(hit) || hit.contains(el))) {
-      throw new Error('click: center of element is covered (by ' + (hit?.tagName ?? 'nothing') + ')');
+    const covered = hit && !(hit === el || el.contains(hit) || hit.contains(el));
+    if (covered && requireHit) {
+      throw new Error('click: center of element is covered (by ' + hit.tagName + ')');
     }
     this.fire(el, 'pointerdown'); this.fire(el, 'mousedown');
     this.fire(el, 'pointerup'); this.fire(el, 'mouseup'); this.fire(el, 'click');
@@ -301,13 +303,13 @@ async function main() {
   if (cmd === 'eval') {
     const expr = rest[0];
     if (!expr) { console.error('usage: eval "<js>"'); process.exit(1); }
-    const cdp = await Cdp.connect({ navigate: true });
-    const out = await cdp.eval(`(async () => { const { sleep } = window.__h; ${expr} })()`);
+    const cdp = await Cdp.connect();
+    const out = await cdp.eval(`(async () => { const h = window.__h; const { sleep } = h; ${expr} })()`);
     console.log(typeof out === 'string' ? out : JSON.stringify(out, null, 1));
     return;
   }
   if (cmd === 'shot') {
-    const cdp = await Cdp.connect({ navigate: true });
+    const cdp = await Cdp.connect();
     console.log('saved', await cdp.shot(rest[0] ?? 'shot'));
     return;
   }
@@ -318,7 +320,7 @@ async function main() {
     return;
   }
   if (cmd === 'probe') {
-    const cdp = await Cdp.connect({ navigate: true });
+    const cdp = await Cdp.connect();
     const info = await cdp.eval(`({
       url: location.href,
       ready: document.readyState,

@@ -77,6 +77,30 @@ describe('registrationService', () => {
     assert.ok(rows[0].id > rows[1].id);
   });
 
+  it('persists derived-series provenance (Phase 4 M1)', () => {
+    const geometry = { cols: 64, rows: 64, numSlices: 8, spacingX: 2, spacingY: 2, originX: -64, originY: -64, zPositions: [0, -2, -4] };
+    const derived = svc.createDerivedSeries({
+      studyId: STUDY_ID, registrationId: 1, fixedSeriesUid: FIXED, movingSeriesUid: MOVING,
+      seriesUid: '2.25.1234', description: 'Registered',
+      geometry, matrix: SHIFTED, userId: 1, reqId: 't',
+    });
+    assert.ok(derived.id > 0);
+    assert.strictEqual(derived.seriesUid, '2.25.1234');
+    assert.strictEqual(derived.kind, 'REGISTERED_SERIES');
+    assert.deepStrictEqual(derived.matrix, SHIFTED);
+    assert.strictEqual(derived.geometry.cols, 64);
+    const list = svc.listDerivedSeries({ studyId: STUDY_ID, userId: 1, reqId: 't' });
+    assert.strictEqual(list.length, 1);
+    assert.throws(
+      () => svc.createDerivedSeries({ studyId: STUDY_ID, seriesUid: '', matrix: SHIFTED, geometry, userId: 1, reqId: 't' }),
+      e => e.status === 400,
+    );
+    assert.throws(
+      () => svc.createDerivedSeries({ studyId: STUDY_ID, seriesUid: 'x', matrix: [[1, 0], [0, 1]], geometry, userId: 1, reqId: 't' }),
+      e => e.status === 400,
+    );
+  });
+
   it('validates matrix shape, values and method', () => {
     const base = { studyId: STUDY_ID, fixedSeriesUid: FIXED, movingSeriesUid: MOVING, userId: 1, reqId: 't' };
     assert.throws(() => svc.saveRegistration({ ...base, matrix: [[1, 0], [0, 1]] }), e => e.status === 400);

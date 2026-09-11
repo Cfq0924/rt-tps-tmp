@@ -243,6 +243,26 @@ CREATE TABLE IF NOT EXISTS series_registrations (
 
 CREATE INDEX IF NOT EXISTS idx_series_registrations_study ON series_registrations(study_id);
 
+-- Derived series (Phase 4 M1): provenance of volumes generated in-browser
+-- from a registration (e.g. a rigidly resampled moving series). v1 stores
+-- metadata only — pixel-level DICOM files are written in a later step.
+CREATE TABLE IF NOT EXISTS derived_series (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+  registration_id INTEGER REFERENCES series_registrations(id),
+  kind TEXT NOT NULL DEFAULT 'REGISTERED_SERIES',
+  fixed_series_uid TEXT,
+  moving_series_uid TEXT,
+  series_uid TEXT NOT NULL,
+  description TEXT,
+  geometry_json TEXT,
+  matrix_json TEXT,
+  created_by INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_derived_series_study ON derived_series(study_id);
+
 -- Plan sums (Eclipse Ch4.16): a derived RTDOSE file produced by voxel-wise
 -- addition of two or more same-geometry dose grids. input_file_ids_json is a
 -- JSON array of the source dicom_files ids.

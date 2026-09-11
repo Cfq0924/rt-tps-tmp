@@ -5,6 +5,8 @@ import {
   listRegistrations,
   getRegistration,
   getLatestRegistration,
+  createDerivedSeries,
+  listDerivedSeries,
 } from '../services/registrationService.js';
 
 const router = Router();
@@ -54,6 +56,44 @@ router.get('/study/:studyId/latest', authMiddleware, (req, res, next) => {
       reqId: req.id,
     });
     res.json({ registration });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/registration/study/:studyId/derived-series — register the
+// provenance of a browser-generated resampled volume (v1 metadata only)
+// body: { registrationId?, fixedSeriesUid?, movingSeriesUid?, seriesUid,
+//         description?, geometry, matrix }
+router.post('/study/:studyId/derived-series', authMiddleware, (req, res, next) => {
+  try {
+    const derived = createDerivedSeries({
+      studyId: parseInt(req.params.studyId, 10),
+      registrationId: req.body?.registrationId,
+      fixedSeriesUid: req.body?.fixedSeriesUid,
+      movingSeriesUid: req.body?.movingSeriesUid,
+      seriesUid: req.body?.seriesUid,
+      description: req.body?.description,
+      geometry: req.body?.geometry,
+      matrix: req.body?.matrix,
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.status(201).json({ derivedSeries: derived });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/registration/study/:studyId/derived-series — provenance list
+router.get('/study/:studyId/derived-series', authMiddleware, (req, res, next) => {
+  try {
+    const derivedSeries = listDerivedSeries({
+      studyId: parseInt(req.params.studyId, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ derivedSeries });
   } catch (err) {
     next(err);
   }

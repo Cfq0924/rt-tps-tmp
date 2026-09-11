@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Box, Typography, TextField, Button, Slider, MenuItem, Tooltip, Divider } from '@mui/material';
 import { AutoMode, RestartAlt, Save } from '@mui/icons-material';
+import RegisteredVolumePanel from './RegisteredVolumePanel.jsx';
 import { identity4, axialTransform, decomposeAxial, intensityCentroid } from '../../lib/registrationMath.js';
 import { imageToHU } from '../contouring/paintCore.js';
 import * as cornerstone from '@cornerstonejs/core';
@@ -61,6 +62,7 @@ export default function RegistrationPanel({
   const [opacity, setOpacity] = useState(0.5);
   const [lastMethod, setLastMethod] = useState('MANUAL');
   const [savedNote, setSavedNote] = useState('');
+  const [registrationId, setRegistrationId] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -109,6 +111,7 @@ export default function RegistrationPanel({
           setTx(String(Number(x.toFixed(2))));
           setTy(String(Number(y.toFixed(2))));
           setLastMethod(registration.method);
+          setRegistrationId(registration.id);
           setSavedNote(`loaded saved registration (method ${registration.method})`);
         }
       } catch { /* keep defaults */ }
@@ -183,6 +186,17 @@ export default function RegistrationPanel({
   };
 
   const nudge = (setter, current, delta) => setter(String(Number((Number(current) + delta).toFixed(2))));
+
+  const panelBottom = movingUid ? (
+    <RegisteredVolumePanel
+      studyId={studyId}
+      files={files}
+      fixedSeriesUid={fixedSeriesUid}
+      movingFiles={moving?.files ?? null}
+      matrix={matrix}
+      registrationId={registrationId}
+    />
+  ) : null;
 
   return (
     <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1, overflow: 'auto' }}>
@@ -271,6 +285,7 @@ export default function RegistrationPanel({
           current transform; saved registrations reload per series pair.
         </Typography>
       </Box>
+      {panelBottom}
     </Box>
   );
 }

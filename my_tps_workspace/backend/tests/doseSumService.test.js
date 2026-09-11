@@ -139,13 +139,16 @@ describe('doseSumService', () => {
     assert.strictEqual(row.study_id, STUDY_ID);
   });
 
-  it('rejects single-input sums and mismatched geometry', async () => {
+  it('rejects single-input sums', async () => {
     await assert.rejects(
       svc.createDoseSum({ studyId: STUDY_ID, doseFileIds: [fileIdA], name: 'x', userId: 1, reqId: 't' }),
       e => e.status === 400,
     );
-    // a different-geometry dose file (5 rows)
-    const dsBuf = makeDoseFile({ sopUid: '1.2.840.sumtest.c', scaling: 1e-6, values: new Array(24).fill(10), rows: 5 });
+  });
+
+  it('resamples cross-geometry inputs onto the reference grid (M1)', async () => {
+    // dose C: constant 10 cGy, 5 rows (different geometry: one extra row)
+    const dsBuf = makeDoseFile({ sopUid: '1.2.840.sumtest.c', scaling: 1e-6, values: new Array(30).fill(10), rows: 5 });
     const path = join(TEST_FILES_DIR, 'doseC.dcm');
     writeFileSync(path, dsBuf);
     const { default: Database } = await import('better-sqlite3');
@@ -155,15 +158,28 @@ describe('doseSumService', () => {
       VALUES (?, 's', '1.2.840.sumtest.c', 'RTDOSE', 1, ?, 'doseC.dcm')
     `).run(STUDY_ID, path);
     db.close();
-    await assert.rejects(
-      svc.createDoseSum({ studyId: STUDY_ID, doseFileIds: [fileIdA, info.lastInsertRowid], name: 'x', userId: 1, reqId: 't' }),
-      e => e.status === 400,
+
+    const sum2 = await svc.createDoseSum({
+      studyId: STUDY_ID, doseFileIds: [fileIdA, info.lastInsertRowid], name: 'A + C (resampled)', userId: 1, reqId: 't',
+    });
+    const { parseRTDose } = await import('../src/services/rtDoseService.js');
+    const db2 = (await import('../src/db/init.js')).getDb();
+    const out = db2.prepare('SELECT file_path FROM dicom_files WHERE id = ?').get(sum2.outputFileId);
+    const parsed = await parseRTDose(out.file_path);
+    // output carries the REFERENCE geometry (A: 4 rows), not C's 5 rows
+    assert.strictEqual(parsed.rows, 4);
+    const grid = (await import('../src/services/rtDoseService.js')).calculateDoseValue(
+      parsed.pixelData, parsed.doseGridScaling, parsed.doseUnits,
     );
+    // A voxel centres coincide with C's → resampled C is exactly 10 cGy
+    for (let i = 0; i < 24; i++) {
+      assert.ok(Math.abs(grid[i] - (100 * (i % 12) + 10)) < 0.01, `voxel ${i}: ${grid[i]}`);
+    }
   });
 
   it('lists sums of a study', async () => {
     const sums = svc.listDoseSums({ studyId: STUDY_ID, userId: 1, reqId: 't' });
-    assert.strictEqual(sums.length, 1);
-    assert.strictEqual(sums[0].name, 'Plan A + Plan B');
+    assert.strictEqual(sums.length, 2);
+    assert.strictEqual(sums[0].name, 'A + C (resampled)');
   });
 });
