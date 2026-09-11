@@ -9,7 +9,7 @@ import { auditLog } from '../logging/index.js';
 export function listCourses({ studyId, userId, reqId }) {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT c.id, c.study_id as studyId, c.name, c.intent, c.created_at as createdAt,
+    SELECT c.id, c.study_id as studyId, c.name, c.intent, c.status, c.start_date as startDate, c.completed_date as completedDate, c.created_at as createdAt,
            (SELECT COUNT(*) FROM ebrt_plans p WHERE p.course_id = c.id) as planCount
     FROM courses c WHERE c.study_id = ? ORDER BY c.id DESC
   `).all(studyId);
@@ -30,7 +30,10 @@ export function createCourse({ studyId, name, intent, userId, reqId }) {
   return row;
 }
 
-export function updateCourse({ id, name, intent, userId, reqId }) {
+const COURSE_STATUSES = new Set(['ACTIVE', 'COMPLETED', 'CANCELLED']);
+const COURSE_INTENTS = new Set(['CURATIVE', 'ADJUVANT', 'PALLIATIVE', 'SUPPORTIVE', 'BENIGN']);
+
+export function updateCourse({ id, name, intent, status, startDate, completedDate, userId, reqId }) {
   const db = getDb();
   const existing = db.prepare('SELECT id FROM courses WHERE id = ?').get(id);
   if (!existing) {
@@ -41,10 +44,29 @@ export function updateCourse({ id, name, intent, userId, reqId }) {
     db.prepare('UPDATE courses SET name = ? WHERE id = ?').run(String(name).trim(), id);
   }
   if (intent !== undefined) {
-    db.prepare('UPDATE courses SET intent = ? WHERE id = ?').run(intent, id);
+    if (intent && !COURSE_INTENTS.has(String(intent))) {
+      throw Object.assign(new Error(`intent must be one of ${[...COURSE_INTENTS].join('/')}`), { status: 400 });
+    }
+    db.prepare('UPDATE courses SET intent = ? WHERE id = ?').run(intent || null, id);
   }
-  auditLog(db, { reqId, userId, action: 'update_course', resourceType: 'course', resourceId: id, metadata: { name, intent } });
-  const row = db.prepare('SELECT id, study_id as studyId, name, intent, created_at as createdAt FROM courses WHERE id = ?').get(id);
+  if (status !== undefined) {
+    if (status && !COURSE_STATUSES.has(String(status))) {
+      throw Object.assign(new Error(`status must be one of ${[...COURSE_STATUSES].join('/')}`), { status: 400 });
+    }
+    db.prepare('UPDATE courses SET status = ? WHERE id = ?').run(String(status), id);
+  }
+  if (startDate !== undefined) {
+    db.prepare('UPDATE courses SET start_date = ? WHERE id = ?').run(startDate || null, id);
+  }
+  if (completedDate !== undefined) {
+    db.prepare('UPDATE courses SET completed_date = ? WHERE id = ?').run(completedDate || null, id);
+  }
+  auditLog(db, { reqId, userId, action: 'update_course', resourceType: 'course', resourceId: id, metadata: { name, intent, status, startDate, completedDate } });
+  const row = db.prepare(`
+    SELECT id, study_id as studyId, name, intent, status, start_date as startDate,
+           completed_date as completedDate, created_at as createdAt
+    FROM courses WHERE id = ?
+  `).get(id);
   return row;
 }
 

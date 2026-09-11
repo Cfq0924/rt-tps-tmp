@@ -46,6 +46,9 @@ router.patch('/:id', authMiddleware, (req, res, next) => {
       id: parseInt(req.params.id, 10),
       name: req.body?.name,
       intent: req.body?.intent,
+      status: req.body?.status,
+      startDate: req.body?.startDate,
+      completedDate: req.body?.completedDate,
       userId: req.user.userId,
       reqId: req.id,
     });

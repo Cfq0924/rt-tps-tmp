@@ -295,6 +295,18 @@ export default function StudyViewerPage() {
     return filesForModality.find(f => f.id === selectedFileId) || null;
   }, [activeModality, selectedFileId, filesForModality]);
 
+  // isocenter drag release (EBRT overlay): persist to the workspace plan
+  const handleIsoDragEnd = useCallback(async (p) => {
+    const plan = ebrt.selectedPlan;
+    if (!plan) return;
+    try {
+      await ebrt.updatePlan(plan.id, {
+        isocenter_x: Number(p.x.toFixed(2)),
+        isocenter_y: Number(p.y.toFixed(2)),
+        isocenter_z: Number(p.z.toFixed(2)),
+      });
+    } catch { /* best-effort */ }
+  }, [ebrt]);
   // P4-M4: visible RTSTRUCT polygons for coronal/sagittal silhouette lines
   const structureOverlayPolygons = useMemo(() => {
     if (structures.length === 0 || contours.length === 0) return [];
@@ -837,8 +849,8 @@ export default function StudyViewerPage() {
         {/* Main viewer (+ MPR column when enabled) */}
         <Box sx={isEbrtQuad ? {
             flex: 1, display: 'grid', overflow: 'hidden', position: 'relative', background: '#07111f',
-            gridTemplateColumns: '240px minmax(0, 2fr) minmax(0, 1fr)',
-            gridTemplateRows: 'minmax(0, 1fr) minmax(0, 1fr) auto',
+            gridTemplateColumns: '200px minmax(0, 2.2fr) minmax(0, 1fr) 260px',
+            gridTemplateRows: 'minmax(0, 2.2fr) minmax(0, 1fr) minmax(150px, 220px)',
           } : { flex: 1, display: 'flex', overflow: 'hidden', position: 'relative', background: '#07111f' }}>
         {isEbrtQuad && (
           <Box sx={{ gridColumn: 1, gridRow: '1 / 3', borderRight: '1px solid rgba(88,196,220,0.12)', overflow: 'auto' }}>
@@ -857,7 +869,7 @@ export default function StudyViewerPage() {
             />
           </Box>
         )}
-        <Box sx={isEbrtQuad ? { gridColumn: 2, gridRow: 1, position: 'relative', minWidth: 0, minHeight: 0, overflow: 'hidden' } : { flex: mprActive ? 2 : 1, position: 'relative' }}>
+        <Box sx={isEbrtQuad ? { gridColumn: 2, gridRow: '1 / 3', position: 'relative', minWidth: 0, minHeight: 0, overflow: 'hidden' } : { flex: mprActive ? 2 : 1, position: 'relative' }}>
           {error && (
             <Alert
               severity="error"
@@ -963,6 +975,8 @@ export default function StudyViewerPage() {
               plan={ebrt.selectedPlan ?? rtPlan}
               selectedBeamNumber={selectedBeamNumber ?? (ebrt.selectedPlan?.beams?.[0]?.beamNumber ?? null)}
               ctZ={currentCTZ}
+              isoDraggable={!!ebrt.selectedPlan}
+              onIsoDragEnd={handleIsoDragEnd}
             />
           )}
 
@@ -1063,7 +1077,7 @@ export default function StudyViewerPage() {
           </Box>
         )}
         {isEbrtQuad && (
-          <Box sx={{ gridColumn: 2, gridRow: 2, position: 'relative', minWidth: 0, minHeight: 0,
+          <Box sx={{ gridColumn: 3, gridRow: 1, position: 'relative', minWidth: 0, minHeight: 0,
                      overflow: 'hidden', borderTop: '1px solid rgba(88,196,220,0.12)' }}>
             <MPRView
               orientation="coronal"
@@ -1095,7 +1109,7 @@ export default function StudyViewerPage() {
           </Box>
         )}
         {isEbrtQuad && (
-          <Box sx={{ gridColumn: '1 / -1', gridRow: 3, height: 170 }}>
+          <Box sx={{ gridColumn: '2 / 5', gridRow: 3, height: 170 }}>
             <EbrtInfoTabs
               plan={ebrt.selectedPlan}
               dvhResults={dvh.results}
@@ -1259,17 +1273,20 @@ export default function StudyViewerPage() {
             />
           )}
           {activeModule === 'ebrt' && (
-            <EbrtWorkspace
-              studyId={Number(studyId)}
-              ebrt={ebrt}
-              rtPlanFileId={rtPlanFileId}
-              currentSliceIdx={currentImageIndex}
-              onJumpToSlice={handleJumpToSlice}
-              structures={structures}
-              dvhResults={dvh.results}
-              onLoadDose={loadGrid}
-              doseLoading={gridLoading}
-            />
+            <Box sx={{ gridColumn: 4, gridRow: '1 / 3', minHeight: 0, overflow: 'auto',
+                       borderTop: '1px solid rgba(88,196,220,0.12)' }}>
+              <EbrtWorkspace
+                studyId={Number(studyId)}
+                ebrt={ebrt}
+                rtPlanFileId={rtPlanFileId}
+                currentSliceIdx={currentImageIndex}
+                onJumpToSlice={handleJumpToSlice}
+                structures={structures}
+                dvhResults={dvh.results}
+                onLoadDose={loadGrid}
+                doseLoading={gridLoading}
+              />
+            </Box>
           )}
           {activeModule === 'registration' && (
             <RegistrationPanel

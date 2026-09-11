@@ -24,18 +24,41 @@ import {
  * @param {Object|null} props.plan - { beams: [...] } from either source
  * @param {number|null} props.selectedBeamNumber - highlighted beam
  * @param {number|null} props.ctZ - z (mm) of the displayed slice
+ * @param {Function|null} props.onIsoDragEnd - ({x,y,z}) => void on isocenter
+ *   drag release (the caller persists it, e.g. PATCH plan isocenter)
+ * @param {boolean} [props.isoDraggable] - enable grabbing the isocenter marker
  */
 export default function EBRTBeamsOverlay({
   viewport,
   plan,
   selectedBeamNumber,
   ctZ,
+  onIsoDragEnd = null,
+  isoDraggable = false,
 }) {
   const canvasRef = useRef(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    // while dragging, the marker follows the pointer (device-space override)
+    let dragIso = null;
+
+    // isocenter in effect scope so both the draw pass and the drag handler
+    // see the same point (normalized: workspace plan first, then RTPLAN)
+    const currentIso = () => {
+      const first = plan?.beams?.[0];
+      if (!first) return null;
+      if (plan.isocenterX != null) {
+        return { x: plan.isocenterX, y: plan.isocenterY, z: plan.isocenterZ };
+      }
+      return first.isocenterPosition
+        ? { ...first.isocenterPosition }
+        : (first.isocenterX != null
+            ? { x: first.isocenterX, y: first.isocenterY, z: first.isocenterZ }
+            : null);
+    };
 
     const draw = () => {
       const parent = canvas.parentElement;
@@ -67,7 +90,7 @@ export default function EBRTBeamsOverlay({
             : (first.isocenterX != null
                 ? { x: first.isocenterX, y: first.isocenterY, z: first.isocenterZ }
                 : null));
-      if (!iso) return;
+      if (!currentIso()) return;
 
       const beams = plan.beams.map(b => {
         if (b.isocenterPosition) {
@@ -97,10 +120,11 @@ export default function EBRTBeamsOverlay({
 
       const selected = beams.find(b => b.number === selectedBeamNumber) ?? null;
 
-      // --- isocenter crosshair (every slice) ---
-      const isoCanvas = projectWorldToCanvas(viewport, [iso.x, iso.y, iso.z]);
+      // --- isocenter crosshair (every slice); follows the pointer while dragged ---
+      const isoPt = dragIso ?? currentIso();
+      const isoCanvas = projectWorldToCanvas(viewport, [isoPt.x, isoPt.y, isoPt.z]);
       const arm = 9;
-      ctx.strokeStyle = '#f6c177';
+      ctx.strokeStyle = dragIso ? '#58c4dc' : '#f6c177';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(isoCanvas.x - arm, isoCanvas.y);
@@ -109,7 +133,7 @@ export default function EBRTBeamsOverlay({
       ctx.lineTo(isoCanvas.x, isoCanvas.y + arm);
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(isoCanvas.x, isoCanvas.y, 3, 0, Math.PI * 2);
+      ctx.arc(isoCanvas.x, isoCanvas.y, dragIso ? 5 : 3, 0, Math.PI * 2);
       ctx.stroke();
 
       // --- reference points: circle + label on their own slice ---
@@ -136,7 +160,7 @@ export default function EBRTBeamsOverlay({
 
       // --- selected beam geometry on the isocenter slice ---
       if (!selected || !selected.jaw) return;
-      const onIsoSlice = Math.abs(ctZ - iso.z) <= 1.5;
+      const onIsoSlice = Math.abs(ctZ - currentIso().z) <= 1.5;
       if (!onIsoSlice) return;
 
       const corners = beamPortalCorners(selected.iso, selected.jaw);
@@ -193,11 +217,49 @@ export default function EBRTBeamsOverlay({
     el?.addEventListener(eventName, onCameraModified);
     const ro = new ResizeObserver(() => draw());
     if (el) ro.observe(el);
+    // isocenter drag: grab the marker (≤14 px), follow the pointer, save on
+    // release. Window-capture listeners fire before the cornerstone tools
+    // registered on the element, so the grab always wins.
+    let dragIsoLocal = null;
+    const onDownCapture = (e) => {
+      if (!isoDraggable || !onIsoDragEnd || e.button !== 0) return;
+      if (e.target !== el) return;
+      const rect = el.getBoundingClientRect();
+      const cur = dragIsoLocal ?? currentIso();
+      if (!cur) return;
+      const c = projectWorldToCanvas(viewport, [cur.x, cur.y, cur.z]);
+      if (Math.hypot(e.clientX - rect.left - c.x, e.clientY - rect.top - c.y) > 14) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const onMoveCapture = (me) => {
+        me.preventDefault();
+        me.stopImmediatePropagation();
+        const w = viewport.canvasToWorld([me.clientX - rect.left, me.clientY - rect.top]);
+        if (!w) return;
+        dragIsoLocal = { x: w[0], y: w[1], z: ctZ ?? w[2] };
+        draw();
+      };
+      const onUpCapture = () => {
+        window.removeEventListener('pointermove', onMoveCapture, true);
+        window.removeEventListener('pointerup', onUpCapture, true);
+        if (dragIsoLocal) {
+          const p = dragIsoLocal;
+          dragIsoLocal = null;
+          draw();
+          onIsoDragEnd({ x: p.x, y: p.y, z: p.z });
+        }
+      };
+      window.addEventListener('pointermove', onMoveCapture, true);
+      window.addEventListener('pointerup', onUpCapture, true);
+    };
+    window.addEventListener('pointerdown', onDownCapture, true);
+
     return () => {
+      window.removeEventListener('pointerdown', onDownCapture, true);
       el?.removeEventListener(eventName, onCameraModified);
       ro.disconnect();
     };
-  }, [viewport, plan, selectedBeamNumber, ctZ]);
+  }, [viewport, plan, selectedBeamNumber, ctZ, isoDraggable, onIsoDragEnd]);
 
   return (
     <Box

@@ -16,14 +16,23 @@
 | 8 | 剂量计算界面 | p271：Calculation Models/Options（算法、网格 0.1–0.5cm、异质修正、组织材料） | m-workflow-complete.png：Engine 选择（v2 发散+ρ+MLC / v1）+ Calc Dose（busy+耗时）+ 网格尺寸在建计划表单 + Calculation Models tab（Info 窗口可编辑） | ✅ 要素齐（算法/网格/异质/计算进度与结果 RTDOSE #96） |
 | 9 | Normalization | p282-284 Plan Normalization 对话框 | PLAN OPS Normalize（10 模式）+ Apply（busy 态） | ✅（前一审计已全模式实测） |
 
-## 与手册流程的真实差距（按影响排序）
+## 与手册流程的真实差距（2026-09-12 复核后已补齐 2、3）
 
 1. **优化器本体缺失**（M3）：优化运行为原型模拟，DVO 读数是演示性收敛——界面骨架已按
    Eclipse Objectives+DVH+迭代布局，接 M3 时替换循环即可。
-2. **等中心视口拖拽**：手册支持在任意视口拖动等中心；我们目前是对话框坐标输入 +
-   靶区质心一键。可在 MPR/四视口 marker 上补拖拽。
-3. **Course 属性**（Intent/Status/Start/Completed）：后端有 intent 字段，UI 未展示。
+2. ✅ **等中心视口拖拽已实现**：EBRT 轴位视口内可抓取等中心标记拖动（window
+   capture 监听，松手后 PATCH 计划等中心并持久化），另保留坐标对话框 +
+   靶区质心一键。截图：`m-ebrt-ebpt-layout.png`（新 EBPT 四列布局）。
+3. ✅ **Course 属性已实现**：Intent/Status/Start/Completed 全字段
+   （课程属性对话框 + PATCH /api/courses/:id），截图 `cmp-5-course-props.png`。
 4. **DRR / Setup Fields / Field Alignment**：计划内后置项，本轮范围外。
+
+### 布局修复（顺带发现并修复）
+
+EBRT 四视口此前整体黑屏：右侧计划面板（EbrtWorkspace，内容高 2417px）作为
+无显式定位的 grid 子元素被自动放入隐式行，把显式视口行全部挤成 0。重排为
+Eclipse EBPT 四列布局：[结构树 200px | 轴位大图 2.2fr | 冠/矢 1fr | 计划面板
+260px]，Info 窗口底行跨 2-4 列，视口高度恢复 499px。
 
 ## 证据文件
 

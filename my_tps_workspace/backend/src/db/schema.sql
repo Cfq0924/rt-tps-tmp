@@ -93,6 +93,9 @@ CREATE TABLE IF NOT EXISTS courses (
   study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   intent TEXT,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  start_date TEXT,
+  completed_date TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -46,6 +46,9 @@ function initializeSchema(db) {
   addColumnIfMissing(db, 'ebrt_plans', 'calc_models_json', 'TEXT');
   addColumnIfMissing(db, 'ebrt_plans', 'delta_couch_json', 'TEXT');
   addColumnIfMissing(db, 'ebrt_plans', 'optimization_objectives_json', 'TEXT');
+  addColumnIfMissing(db, 'courses', 'status', "TEXT NOT NULL DEFAULT 'ACTIVE'");
+  addColumnIfMissing(db, 'courses', 'start_date', 'TEXT');
+  addColumnIfMissing(db, 'courses', 'completed_date', 'TEXT');
 }
 
 function addColumnIfMissing(db, table, column, definition) {

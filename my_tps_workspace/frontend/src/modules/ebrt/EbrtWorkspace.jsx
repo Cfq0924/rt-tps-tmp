@@ -11,6 +11,7 @@ import PeerReviewPanel from './PeerReviewPanel.jsx';
 import MlcLeafEditor from './MlcLeafEditor.jsx';
 import SubfieldEditor from './SubfieldEditor.jsx';
 import OptimizationPanel from './OptimizationPanel.jsx';
+import CoursePropsDialog from './CoursePropsDialog.jsx';
 
 const numOrNull = (v) => {
   const n = Number(v);
@@ -134,6 +135,7 @@ export default function EbrtWorkspace({
   }
 
   const [newCourseName, setNewCourseName] = useState('');
+  const [coursePropsOpen, setCoursePropsOpen] = useState(false);
 
   const handleCreateCourse = async () => {
     if (!newCourseName.trim()) return;
@@ -741,6 +743,11 @@ export default function EbrtWorkspace({
                        inputProps={{ style: { fontSize: '0.7rem' } }} />
             <Button size="small" onClick={handleCreateCourse} disabled={!newCourseName.trim()}
                     sx={{ fontSize: '0.6rem', whiteSpace: 'nowrap' }}>Add</Button>
+            <Button size="small" variant="outlined" disabled={!courseId}
+                    onClick={() => setCoursePropsOpen(true)}
+                    sx={{ fontSize: '0.6rem', whiteSpace: 'nowrap', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+              属性
+            </Button>
           </Box>
           <TextField size="small" select label="Machine" value={machineId}
                      onChange={e => { setMachineId(e.target.value); setEnergyMv(getMachine(e.target.value).energies[0]); }}
@@ -1311,6 +1318,16 @@ export default function EbrtWorkspace({
           </Box>
         </>
       )}
+
+      <CoursePropsDialog
+        open={coursePropsOpen}
+        onClose={() => setCoursePropsOpen(false)}
+        course={(ebrt.courses ?? []).find(c => String(c.id) === String(courseId)) ?? null}
+        onSaved={async () => {
+          await ebrt.refreshCourses?.();
+          setOpNote('课程属性已更新');
+        }}
+      />
 
       {/* workflow S1: set isocenter dialog */}
       <Dialog open={isoDialogOpen} onClose={() => !isoBusy && setIsoDialogOpen(false)} maxWidth="xs" fullWidth>
