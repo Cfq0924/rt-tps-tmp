@@ -69,6 +69,40 @@ export function createPatient({ externalId, name, birthDate, gender, userId, req
   return db.prepare('SELECT * FROM patients WHERE id = ?').get(result.lastInsertRowid);
 }
 
+/**
+ * Update editable patient demographics (Phase 4 M5 患者编辑).
+ * external_id is the identity key and is deliberately not editable.
+ */
+export function updatePatient({ id, name, birthDate, gender, userId, reqId }) {
+  const db = getDb();
+  const existing = db.prepare('SELECT * FROM patients WHERE id = ?').get(id);
+  if (!existing) {
+    throw Object.assign(new Error('Patient not found'), { status: 404 });
+  }
+  const next = {
+    name: name !== undefined ? String(name).trim() : existing.name,
+    birth_date: birthDate !== undefined ? (birthDate || null) : existing.birth_date,
+    gender: gender !== undefined ? (gender || null) : existing.gender,
+  };
+  if (!next.name) {
+    throw Object.assign(new Error('name must not be empty'), { status: 400 });
+  }
+  if (next.birth_date && !/^\d{4}-\d{2}-\d{2}$/.test(next.birth_date)) {
+    throw Object.assign(new Error('birthDate must be YYYY-MM-DD'), { status: 400 });
+  }
+  if (next.gender && !['M', 'F', 'O'].includes(next.gender)) {
+    throw Object.assign(new Error('gender must be M, F or O'), { status: 400 });
+  }
+  db.prepare('UPDATE patients SET name = ?, birth_date = ?, gender = ? WHERE id = ?')
+    .run(next.name, next.birth_date, next.gender, id);
+  auditLog(db, {
+    reqId, userId,
+    action: 'update_patient', resourceType: 'patient', resourceId: id,
+    metadata: { name: next.name, birthDate: next.birth_date, gender: next.gender },
+  });
+  return db.prepare('SELECT * FROM patients WHERE id = ?').get(id);
+}
+
 export function findOrCreatePatient({ externalId, name, userId, reqId }) {
   const db = getDb();
 

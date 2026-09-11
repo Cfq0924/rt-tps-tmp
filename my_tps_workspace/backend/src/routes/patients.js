@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
-import { listPatients, getPatient, createPatient, deletePatient } from '../services/patientService.js';
+import { listPatients, getPatient, createPatient, deletePatient, updatePatient } from '../services/patientService.js';
 
 const router = Router();
 
@@ -44,6 +44,23 @@ router.post('/', authMiddleware, (req, res, next) => {
       reqId: req.id,
     });
     res.status(201).json({ patient });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/patients/:id — edit demographics (name/birthDate/gender)
+router.patch('/:id', authMiddleware, (req, res, next) => {
+  try {
+    const patient = updatePatient({
+      id: parseInt(req.params.id, 10),
+      name: req.body?.name,
+      birthDate: req.body?.birthDate,
+      gender: req.body?.gender,
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ patient });
   } catch (err) {
     next(err);
   }

@@ -4,7 +4,7 @@ import { getDb } from '../db/init.js';
 import { auditLog } from '../logging/index.js';
 import { getDoseGrid, invalidateDoseGrid, parseRTDose } from './rtDoseService.js';
 import { getPlan } from './ebrtPlanService.js';
-import { loadStudyMeta } from './exportService.js';
+import { loadStudyMeta, withMediaStorageMeta } from './exportService.js';
 import { parseRTStruct } from './rtStructService.js';
 import { latestFileByModality, sampleDoseAtPoint } from './dicomQuery.js';
 
@@ -320,7 +320,7 @@ export async function normalizePlanDose({ planId, mode, value, userId, reqId }) 
     InstanceCreationDate: new Date().toISOString().slice(0, 10).replaceAll('-', ''),
     InstanceCreationTime: `${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}`,
   };
-  const out = Buffer.from(datasetToBuffer(dataset));
+  const out = Buffer.from(datasetToBuffer(withMediaStorageMeta(dataset)));
   writeFileSync(doseFile.file_path, out);
   invalidateDoseGrid(doseFile.id);
 

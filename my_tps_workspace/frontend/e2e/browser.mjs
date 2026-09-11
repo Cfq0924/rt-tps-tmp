@@ -204,7 +204,8 @@ class Cdp {
     };
     await cdp.send('Runtime.enable');
     await cdp.send('Page.enable');
-    if (navigate || !page.url.includes('/viewer/')) {
+    const appUrl = APP_URL.replace(/\/viewer\/\d+$/, '');
+    if (navigate || !page.url.startsWith(appUrl)) {
       await cdp.send('Page.navigate', { url: APP_URL });
       await cdp.waitForReady();
     }

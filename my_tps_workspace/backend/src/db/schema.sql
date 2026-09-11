@@ -263,6 +263,17 @@ CREATE TABLE IF NOT EXISTS derived_series (
 
 CREATE INDEX IF NOT EXISTS idx_derived_series_study ON derived_series(study_id);
 
+-- PACS destinations (Phase 4 M5): C-STORE targets for the "send to PACS" flow
+CREATE TABLE IF NOT EXISTS pacs_destinations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  aet TEXT NOT NULL,
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  description TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Plan sums (Eclipse Ch4.16): a derived RTDOSE file produced by voxel-wise
 -- addition of two or more same-geometry dose grids. input_file_ids_json is a
 -- JSON array of the source dicom_files ids.

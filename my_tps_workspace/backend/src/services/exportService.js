@@ -5,6 +5,22 @@ import { getDb } from '../db/init.js';
 import { auditLog } from '../logging/index.js';
 import { getPlan } from './ebrtPlanService.js';
 
+/**
+ * dcmjs datasetToBuffer mirrors SOPClassUID into the Part-10 meta header but
+ * NOT MediaStorageSOPInstanceUID — files written without it cannot be filed
+ * by strict PACS. Fill the media-storage meta explicitly before writing.
+ */
+export function withMediaStorageMeta(dataset) {
+  dataset._meta = {
+    ...(dataset._meta ?? {}),
+    MediaStorageSOPClassUID: dataset.SOPClassUID,
+    MediaStorageSOPInstanceUID: dataset.SOPInstanceUID,
+    TransferSyntaxUID: dataset._meta?.TransferSyntaxUID ?? '1.2.840.10008.1.2.1',
+  };
+  return dataset;
+}
+
+
 const { datasetToBuffer, DicomMessage, DicomMetaDictionary } = dcmjs.data;
 
 const RTSTRUCT_SOP_CLASS = '1.2.840.10008.5.1.4.1.481.3';
@@ -240,7 +256,7 @@ export function buildRTStructDataset({ study, segmentationRows, contourRows, ctS
       };
     }),
   };
-  return datasetToBuffer(pruneEmpty(dataset));
+  return datasetToBuffer(pruneEmpty(withMediaStorageMeta(dataset)));
 }
 
 /**
@@ -412,7 +428,7 @@ export function buildRTPlanDataset({ study, plan, seriesUid, sopInstanceUid, dat
     }],
     BeamSequence: beams.map(beamDataset),
   };
-  return datasetToBuffer(pruneEmpty(dataset));
+  return datasetToBuffer(pruneEmpty(withMediaStorageMeta(dataset)));
 }
 
 /**

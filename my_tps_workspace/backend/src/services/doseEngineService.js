@@ -6,7 +6,7 @@ import { getDb } from '../db/init.js';
 import { auditLog } from '../logging/index.js';
 import { getDoseGrid, extractPixelData } from './rtDoseService.js';
 import { getPlan } from './ebrtPlanService.js';
-import { loadStudyMeta } from './exportService.js';
+import { loadStudyMeta, withMediaStorageMeta } from './exportService.js';
 
 const { data: { DicomMessage, DicomMetaDictionary } } = dcmjs;
 
@@ -366,7 +366,7 @@ export async function computeAndStoreDose({ studyId, referenceDoseFileId, planId
     DoseGridScaling: '0.00001',
     PixelData: new Uint8Array(pixels.buffer),
   };
-  const buffer = datasetToBuffer(dataset);
+  const buffer = datasetToBuffer(withMediaStorageMeta(dataset));
 
   const dir = join(uploadDir(), 'dose-engine');
   mkdirSync(dir, { recursive: true });

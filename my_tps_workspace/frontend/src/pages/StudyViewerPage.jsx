@@ -13,6 +13,7 @@ import DosePanel from '../components/DosePanel.jsx';
 import { useRTDose } from '../hooks/useRTDose.js';
 import RTStructSVGOverlay from '../components/RTStructSVGOverlay.jsx';
 import { DEFAULT_ISODOSE_LEVELS } from '../lib/doseTransform.js';
+import SendToPacsDialog from '../components/SendToPacsDialog.jsx';
 import PaintLayer from '../modules/contouring/PaintLayer.jsx';
 import ContouringPanel from '../modules/contouring/ContouringPanel.jsx';
 import { useContouring } from '../modules/contouring/useContouring.js';
@@ -118,6 +119,7 @@ export default function StudyViewerPage() {
     } catch { /* storage unavailable — preferences stay session-only */ }
   }, [doseDisplayKey, doseVisible, doseOpacity, doseThreshold, isodoseLevels]);
   const [exportMenuAnchor, setExportMenuAnchor] = useState(null);
+  const [pacsDialogOpen, setPacsDialogOpen] = useState(false);
   // P3-M2 registration: moving series + current transform (overlay)
   const [movingState, setMovingState] = useState({ movingUid: '', files: null, movingIndex: 0, matrix: null });
   // MPR three-plane viewer
@@ -754,7 +756,19 @@ export default function StudyViewerPage() {
             >
               RTPLAN — {ebrt.selectedPlan?.name ?? 'no plan selected'}
             </MenuItem>
+            <MenuItem
+              onClick={() => { setExportMenuAnchor(null); setPacsDialogOpen(true); }}
+            >
+              Send to PACS (C-STORE)…
+            </MenuItem>
           </Menu>
+
+          <SendToPacsDialog
+            open={pacsDialogOpen}
+            onClose={() => setPacsDialogOpen(false)}
+            studyId={Number(studyId)}
+            files={files}
+          />
 
           <Button
             size="small"

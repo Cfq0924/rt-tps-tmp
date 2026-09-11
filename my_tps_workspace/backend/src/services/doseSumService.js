@@ -5,7 +5,7 @@ import dcmjs from 'dcmjs';
 import { getDb } from '../db/init.js';
 import { auditLog } from '../logging/index.js';
 import { getDoseGrid } from './rtDoseService.js';
-import { loadStudyMeta, patientLevelDataset } from './exportService.js';
+import { loadStudyMeta, patientLevelDataset, withMediaStorageMeta } from './exportService.js';
 
 const { datasetToBuffer } = dcmjs.data;
 
@@ -173,7 +173,7 @@ export async function createDoseSum({ studyId, doseFileIds, name, userId, reqId 
     TissueHeterogeneityCorrection: 'IMAGE',
     PixelData: pixelBytes,
   };
-  const buffer = datasetToBuffer(dataset);
+  const buffer = datasetToBuffer(withMediaStorageMeta(dataset));
 
   // store the file and register it as a first-class RTDOSE
   const dir = join(uploadDir(), 'dose-sums');
