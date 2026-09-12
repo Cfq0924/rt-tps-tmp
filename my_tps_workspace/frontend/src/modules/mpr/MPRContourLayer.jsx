@@ -36,6 +36,7 @@ export default function MPRContourLayer({
   activeSegmentId = null,
   activeSegmentApproved = false,
   onPaintPlane,
+  onPlaneStrokeEnd,
   onFillRectPlane,
   onCropPlane,
   onFloodFillPlane,
@@ -246,6 +247,7 @@ export default function MPRContourLayer({
         else onCropPlane?.(orientation, planeCoord, rect, cropMode);
       }
     }
+    if (isBrush) onPlaneStrokeEnd?.();
     drawRef.current();
   };
 

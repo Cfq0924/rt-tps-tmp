@@ -340,22 +340,34 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
   const expandActive = useCallback((marginMm, zLayers) => {
     const seg = activeSegment();
     if (!seg || seg.approved || !ctGeom) return;
-    strokeStart(0);
     const marginPx = Math.max(1, marginMm / (ctGeom.pixelSpacing.j || 1));
     const sliceMap = masksRef.current.get(activeSegmentId);
-    if (sliceMap) {
-      const indices = [...sliceMap.keys()];
-      const lo = Math.min(...indices) - zLayers, hi = Math.max(...indices) + zLayers;
-      for (let s = lo; s <= hi; s++) {
-        if (s < 0) continue;
-        if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
-        const m = sliceMap.get(s);
-        expandMask3D(m, ctGeom.cols, ctGeom.rows, marginPx, 0,
-          (dz) => sliceMap.get(s + dz), (dz, mm) => sliceMap.set(s + dz, mm));
-      }
+    if (!sliceMap) return;
+
+    // composite undo: snapshot every existing slice before the 3D expand
+    const group = [];
+    for (const [sliceIdx, mask] of sliceMap) {
+      group.push({ sliceIdx, data: mask.slice() });
     }
-    strokeEnd();
-  }, [activeSegmentId, ctGeom, strokeStart, strokeEnd]);
+    const h = historyRef.current;
+    h.past.push({ segId: activeSegmentId, group });
+    if (h.past.length > 20) h.past.shift();
+    h.future.length = 0;
+
+    const indices = [...sliceMap.keys()];
+    if (indices.length === 0) return;
+    const lo = Math.min(...indices) - zLayers, hi = Math.max(...indices) + zLayers;
+    for (let s = lo; s <= hi; s++) {
+      if (s < 0) continue;
+      if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
+      const m = sliceMap.get(s);
+      expandMask3D(m, ctGeom.cols, ctGeom.rows, marginPx, 0,
+        (dz) => sliceMap.get(s + dz), (dz, mm) => sliceMap.set(s + dz, mm));
+    }
+    setDirty(true);
+    bump();
+    refreshHistoryInfo();
+  }, [activeSegmentId, activeSegment, ctGeom, bump, refreshHistoryInfo]);
 
   /** Auto body contour into the active segment on the displayed slice. */
   const autoBodyOnSlice = useCallback((sliceIdx, ctPixels) => {
@@ -478,15 +490,11 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     return newId;
   }, [activeSegmentId, activeSegment, ctGeom, addSegment, bump]);
 
+  const planeStrokeUndoRef = useRef(false);
+
   /**
-   * Multi-plane brush stroke (Eclipse multi-plane contouring MVP).
-   * Writes into the axial per-slice mask map so save/export stay unchanged.
-   *
-   * @param {'coronal'|'sagittal'} orientation
-   * @param {number} planeCoord - yIdx for coronal, xIdx for sagittal
-   * @param {{u0,v0,u1,v1}} line - plane pixel coords (u = in-plane column, v = slice)
-   * @param {number} brushSizeMm
-   * @param {0|1} value
+   * Multi-plane brush stroke. Undo is snapshotted ONCE per pointer stroke
+   * (planeStrokeUndoRef), not on every interpolated segment.
    */
   const paintOnPlane = useCallback((orientation, planeCoord, line, brushSizeMm, value = 1) => {
     const seg = activeSegment();
@@ -498,18 +506,18 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     const sliceMap = masksRef.current.get(activeSegmentId);
     if (!sliceMap) return;
 
-    // one composite undo covering every slice this stroke may touch
-    const vLo = Math.max(0, Math.floor(Math.min(line.v0, line.v1) - rPx - 1));
-    const vHi = Math.min(numSlices - 1, Math.ceil(Math.max(line.v0, line.v1) + rPx + 1));
-    const group = [];
-    for (let s = vLo; s <= vHi; s++) {
-      if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
-      group.push({ sliceIdx: s, data: sliceMap.get(s).slice() });
+    if (!planeStrokeUndoRef.current) {
+      // one composite undo for the whole stroke — snapshot every existing slice
+      const group = [];
+      for (const [sliceIdx, mask] of sliceMap) {
+        group.push({ sliceIdx, data: mask.slice() });
+      }
+      const h = historyRef.current;
+      h.past.push({ segId: activeSegmentId, group });
+      if (h.past.length > 20) h.past.shift();
+      h.future.length = 0;
+      planeStrokeUndoRef.current = true;
     }
-    const h = historyRef.current;
-    h.past.push({ segId: activeSegmentId, group });
-    if (h.past.length > 20) h.past.shift();
-    h.future.length = 0;
 
     const getSlice = (s) => {
       if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
@@ -528,6 +536,12 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     bump();
     refreshHistoryInfo();
   }, [activeSegmentId, activeSegment, ctGeom, ctFiles, bump, refreshHistoryInfo]);
+
+  /** Call on pointer-up after a multi-plane brush stroke. */
+  const endPlaneStroke = useCallback(() => {
+    planeStrokeUndoRef.current = false;
+    refreshHistoryInfo();
+  }, [refreshHistoryInfo]);
 
   /** Shared helper: snapshot slices spanned by a plane stroke (v range). */
   const withPlaneUndo = useCallback((vLo, vHi, fn) => {
@@ -618,7 +632,7 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     strokeStart, strokeEnd, undo, redo,
     floodFillAt, applyBoolean, expandActive, autoBodyOnSlice,
     cleanupActive, cropActiveOnSlice, cropActiveAllSlices, extractWallFromActive,
-    paintOnPlane, fillRectOnPlane, cropOnPlane, floodFillOnPlane,
+    paintOnPlane, endPlaneStroke, fillRectOnPlane, cropOnPlane, floodFillOnPlane,
     addSegment, addSegmentFromDictionary, updateSegment, deleteSegment, save,
     loadFromServer, getMask, serializeSegment,
   };

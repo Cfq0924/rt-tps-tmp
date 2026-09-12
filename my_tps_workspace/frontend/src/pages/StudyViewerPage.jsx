@@ -473,6 +473,15 @@ export default function StudyViewerPage() {
   const mprPaintActive = mprActive && activeModule === 'contouring'
     && ['brush', 'eraser', 'floodfill', 'rect', 'crop'].includes(contouring.tool);
 
+  // Eclipse-like: entering CONTOURING with a CT stack auto-enables MPR once
+  const autoMprRef = useRef(false);
+  useEffect(() => {
+    if (activeModule === 'contouring' && !autoMprRef.current && imageIds.length > 0 && activeModality === 'CT') {
+      autoMprRef.current = true;
+      setMprEnabled(true);
+    }
+  }, [activeModule, imageIds.length, activeModality]);
+
   const prescriptionCgy = (() => {
     if (ebrt.selectedPlan?.prescriptionDoseGy != null) {
       return Math.round(ebrt.selectedPlan.prescriptionDoseGy * 100);
@@ -715,9 +724,14 @@ export default function StudyViewerPage() {
 
           <Divider orientation="vertical" flexItem />
 
-          {/* Modality tabs (imaging module only) */}
-          {activeModule === 'images' && activeModality === 'CT' && imageIds.length > 0 && (
-            <Tooltip title="Three-plane viewer (axial + coronal + sagittal)">
+          {/* MPR three-plane toggle — available in IMAGES and CONTOURING (Eclipse multi-plane) */}
+          {(activeModule === 'images' || activeModule === 'contouring')
+            && activeModality === 'CT' && imageIds.length > 0 && (
+            <Tooltip title={
+              activeModule === 'contouring'
+                ? 'Three-plane viewer — paint on coronal/sagittal'
+                : 'Three-plane viewer (axial + coronal + sagittal)'
+            }>
               <Chip
                 label="MPR"
                 size="small"
@@ -1155,6 +1169,7 @@ export default function StudyViewerPage() {
                   activeSegmentId={contouring.activeSegmentId}
                   activeSegmentApproved={contouring.activeSegmentApproved}
                   onPaintPlane={contouring.paintOnPlane}
+                  onPlaneStrokeEnd={contouring.endPlaneStroke}
                   onFillRectPlane={contouring.fillRectOnPlane}
                   onCropPlane={contouring.cropOnPlane}
                   onFloodFillPlane={contouring.floodFillOnPlane}
@@ -1192,6 +1207,7 @@ export default function StudyViewerPage() {
                   activeSegmentId={contouring.activeSegmentId}
                   activeSegmentApproved={contouring.activeSegmentApproved}
                   onPaintPlane={contouring.paintOnPlane}
+                  onPlaneStrokeEnd={contouring.endPlaneStroke}
                   onFillRectPlane={contouring.fillRectOnPlane}
                   onCropPlane={contouring.cropOnPlane}
                   onFloodFillPlane={contouring.floodFillOnPlane}
