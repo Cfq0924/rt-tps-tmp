@@ -344,22 +344,24 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     const sliceMap = masksRef.current.get(activeSegmentId);
     if (!sliceMap) return;
 
-    // composite undo: snapshot every existing slice before the 3D expand
+    // composite undo: snapshot every slice in the expand range BEFORE the
+    // 3D expand — including slices that don't exist yet (they must restore
+    // to empty, otherwise the expansion leaks past an undo)
+    const indices = [...sliceMap.keys()];
+    if (indices.length === 0) return;
+    const lo = Math.max(0, Math.min(...indices) - zLayers);
+    const hi = Math.min(ctFiles.length - 1, Math.max(...indices) + zLayers);
     const group = [];
-    for (const [sliceIdx, mask] of sliceMap) {
-      group.push({ sliceIdx, data: mask.slice() });
+    for (let s = lo; s <= hi; s++) {
+      if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
+      group.push({ sliceIdx: s, data: sliceMap.get(s).slice() });
     }
     const h = historyRef.current;
     h.past.push({ segId: activeSegmentId, group });
     if (h.past.length > 20) h.past.shift();
     h.future.length = 0;
 
-    const indices = [...sliceMap.keys()];
-    if (indices.length === 0) return;
-    const lo = Math.min(...indices) - zLayers, hi = Math.max(...indices) + zLayers;
     for (let s = lo; s <= hi; s++) {
-      if (s < 0) continue;
-      if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
       const m = sliceMap.get(s);
       expandMask3D(m, ctGeom.cols, ctGeom.rows, marginPx, 0,
         (dz) => sliceMap.get(s + dz), (dz, mm) => sliceMap.set(s + dz, mm));
@@ -507,17 +509,26 @@ export function useContouring({ studyId, ctFiles = [], ctGeom }) {
     if (!sliceMap) return;
 
     if (!planeStrokeUndoRef.current) {
-      // one composite undo for the whole stroke — snapshot every existing slice
-      const group = [];
-      for (const [sliceIdx, mask] of sliceMap) {
-        group.push({ sliceIdx, data: mask.slice() });
-      }
+      // one composite undo entry per stroke; per-slice snapshots are appended
+      // below as the stroke touches them (including slices created mid-stroke)
+      planeStrokeUndoRef.current = new Set();
       const h = historyRef.current;
-      h.past.push({ segId: activeSegmentId, group });
+      h.past.push({ segId: activeSegmentId, group: [] });
       if (h.past.length > 20) h.past.shift();
       h.future.length = 0;
-      planeStrokeUndoRef.current = true;
     }
+    const strokeEntry = h.past[h.past.length - 1];
+    if (!strokeEntry || strokeEntry.segId !== activeSegmentId) return;
+    const snapOnce = (s) => {
+      if (planeStrokeUndoRef.current.has(s)) return;
+      if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
+      planeStrokeUndoRef.current.add(s);
+      strokeEntry.group.push({ sliceIdx: s, data: sliceMap.get(s).slice() });
+    };
+    snapOnce(Math.floor(line.v0));
+    snapOnce(Math.ceil(line.v0));
+    snapOnce(Math.floor(line.v1));
+    snapOnce(Math.ceil(line.v1));
 
     const getSlice = (s) => {
       if (!sliceMap.has(s)) sliceMap.set(s, new Uint8Array(ctGeom.cols * ctGeom.rows));
