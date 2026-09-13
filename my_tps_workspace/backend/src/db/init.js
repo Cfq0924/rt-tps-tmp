@@ -38,6 +38,7 @@ function initializeSchema(db) {
   addColumnIfMissing(db, 'ebrt_beams', 'wedge_angle', 'REAL');
   addColumnIfMissing(db, 'ebrt_beams', 'bolus', 'TEXT');
   addColumnIfMissing(db, 'ebrt_beams', 'meterset', 'REAL');
+  addColumnIfMissing(db, 'ebrt_beams', 'purpose', "TEXT DEFAULT 'TREATMENT'");
   addColumnIfMissing(db, 'ebrt_beams', 'leaf_pair_count', 'INTEGER');
   addColumnIfMissing(db, 'ebrt_plans', 'course_id', 'INTEGER REFERENCES courses(id)');
   addColumnIfMissing(db, 'ebrt_plans', 'target_structure_name', 'TEXT');

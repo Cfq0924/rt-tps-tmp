@@ -12,6 +12,7 @@ import MlcLeafEditor from './MlcLeafEditor.jsx';
 import SubfieldEditor from './SubfieldEditor.jsx';
 import OptimizationPanel from './OptimizationPanel.jsx';
 import CoursePropsDialog from './CoursePropsDialog.jsx';
+import ApprovalWizard from './ApprovalWizard.jsx';
 
 const numOrNull = (v) => {
   const n = Number(v);
@@ -53,6 +54,8 @@ export default function EbrtWorkspace({
   const [heterogeneity, setHeterogeneity] = useState(false);
   const [courseId, setCourseId] = useState('');
   const [targetStructure, setTargetStructure] = useState('');
+  const [primaryPoint, setPrimaryPoint] = useState('');
+  const [approvalWizard, setApprovalWizard] = useState(false);
 
   // add-beam form state
   const [beamType, setBeamType] = useState('STATIC');
@@ -165,6 +168,7 @@ export default function EbrtWorkspace({
         heterogeneity_correction: heterogeneity,
         course_id: courseId ? Number(courseId) : undefined,
         target_structure_name: targetStructure.trim() || undefined,
+        primary_point_name: primaryPoint.trim() || (targetStructure.trim() ? `${targetStructure.trim()} Ref` : undefined),
         dose_per_fraction_gy: numOrNull(doseGy) && numOrNull(fx) ? numOrNull(doseGy) / numOrNull(fx) : undefined,
         reference_points: targetStructure.trim() ? [{
           name: `${targetStructure.trim()} Rx`, isDpv: true, type: 'TARGET',
@@ -175,6 +179,7 @@ export default function EbrtWorkspace({
       setDoseGy('');
       setFx('');
       setTargetStructure('');
+      setPrimaryPoint('');
       setShowNewPlan(false);
     } catch (err) {
       setFormError(err.message);
@@ -219,27 +224,42 @@ export default function EbrtWorkspace({
     }
   };
 
-  const handleApprovalAdvance = async () => {
+  // Eclipse Plan Approval wizard (§9): Dose Summary → Delta Couch → Confirm
+  const handleApprovalAdvance = () => {
+    if (!selectedPlan) return;
+    if (!NEXT_APPROVAL[selectedPlan.approvalStatus]) return;
+    setFormError('');
+    setApprovalWizard(true);
+  };
+
+  const handleWizardApprove = async (next) => {
+    // Plan Approval Warnings & Errors — block APPROVED on errors
+    if (next === 'APPROVED' && ebrt.getApprovalChecks) {
+      const c = await ebrt.getApprovalChecks(selectedPlan.id);
+      setChecks(c);
+      const errors = c.errors ?? [];
+      if (errors.length > 0) {
+        throw new Error(`Approval blocked (${errors.length} error${errors.length > 1 ? 's' : ''}): ${errors[0]}`);
+      }
+    }
+    await ebrt.updatePlan(selectedPlan.id, { approval_status: next });
+    if (next === 'APPROVED' && ebrt.captureRevision) {
+      await ebrt.captureRevision(selectedPlan.id, 'approved via Plan Approval wizard').catch(() => {});
+    }
+  };
+
+  const handlePersistDeltaCouch = async (shifts) => {
+    await ebrt.updatePlan(selectedPlan.id, { delta_couch_json: shifts });
+  };
+
+  // Section 5: create the orthogonal no-dose imaging fields
+  const handleAddSetupFields = async () => {
     if (!selectedPlan) return;
     setFormError('');
-    setChecks(null);
-    const next = NEXT_APPROVAL[selectedPlan.approvalStatus];
-    if (!next) return;
+    setOpNote('');
     try {
-      // Eclipse Plan Approval Warnings & Errors — block APPROVED on errors
-      if (next === 'APPROVED' && ebrt.getApprovalChecks) {
-        const c = await ebrt.getApprovalChecks(selectedPlan.id);
-        setChecks(c);
-        const errors = c.errors ?? [];
-        if (errors.length > 0) {
-          setFormError(`Approval blocked (${errors.length} error${errors.length > 1 ? 's' : ''}): ${errors[0]}`);
-          return;
-        }
-      }
-      await ebrt.updatePlan(selectedPlan.id, { approval_status: next });
-      if (next === 'APPROVED' && ebrt.captureRevision) {
-        await ebrt.captureRevision(selectedPlan.id, 'auto: approved').catch(() => {});
-      }
+      const r = await ebrt.addSetupFields(selectedPlan.id);
+      setOpNote(`Setup fields created: ${(r.created ?? []).join(', ')}`);
     } catch (err) {
       setFormError(err.message);
     }
@@ -757,6 +777,10 @@ export default function EbrtWorkspace({
           <TextField size="small" label="Target structure" value={targetStructure}
                      onChange={e => setTargetStructure(e.target.value)}
                      inputProps={{ style: { fontSize: '0.7rem' } }} />
+          <TextField size="small" label="Primary reference point" value={primaryPoint}
+                     onChange={e => setPrimaryPoint(e.target.value)}
+                     placeholder="e.g. PTV Ref"
+                     inputProps={{ style: { fontSize: '0.7rem' } }} />
           <TextField size="small" select label="Energy (MV)" value={energyMv}
                      onChange={e => setEnergyMv(Number(e.target.value))}
                      inputProps={{ style: { fontSize: '0.7rem' } }}>
@@ -822,11 +846,11 @@ export default function EbrtWorkspace({
               variant="outlined"
             />
             {NEXT_APPROVAL[selectedPlan.approvalStatus] && (
-              <Tooltip title={`Mark as ${NEXT_APPROVAL[selectedPlan.approvalStatus]}`}>
+              <Tooltip title={`Plan Approval (Dose Summary → Delta Couch → ${NEXT_APPROVAL[selectedPlan.approvalStatus]})`}>
                 <Button size="small" variant="outlined" startIcon={<GppGood />}
                         onClick={handleApprovalAdvance}
                         sx={{ fontSize: '0.55rem', py: 0.1, color: 'primary.main', borderColor: 'rgba(88,196,220,0.3)' }}>
-                  {NEXT_APPROVAL[selectedPlan.approvalStatus]}
+                  Plan Approval
                 </Button>
               </Tooltip>
             )}
@@ -869,6 +893,13 @@ export default function EbrtWorkspace({
                   borderBottom: '1px solid rgba(88,196,220,0.12)' }}
           >
             BEAMS ({selectedPlan.beams?.length ?? 0}) — click row to visualize
+            <Box sx={{ flex: 1 }} />
+            <Tooltip title="Eclipse §5 Setup Fields: orthogonal imaging fields (AP + RT Lat), excluded from dose">
+              <Button size="small" variant="outlined" onClick={handleAddSetupFields}
+                      sx={{ fontSize: '0.55rem', py: 0, px: 0.5, minWidth: 0, color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                + Setup Fields
+              </Button>
+            </Tooltip>
           </Typography>
           <Table size="small" sx={{ '& .MuiTableCell-root': { py: 0.25, px: 0.6, fontSize: '0.6rem', fontFamily: 'mono', borderColor: 'rgba(88,196,220,0.08)' } }}>
             <TableHead>
@@ -891,7 +922,14 @@ export default function EbrtWorkspace({
                   sx={{ cursor: 'pointer' }}
                 >
                   <TableCell>{b.beamNumber}</TableCell>
-                  <TableCell>{b.beamType}</TableCell>
+                  <TableCell>
+                    {b.beamType}
+                    {b.purpose === 'SETUP' && (
+                      <Chip size="small" label="SETUP"
+                            sx={{ height: 13, fontSize: '0.5rem', ml: 0.5, color: '#5cc8ff', borderColor: '#5cc8ff' }}
+                            variant="outlined" />
+                    )}
+                  </TableCell>
                   <TableCell align="right">
                     {b.gantryAngle}{b.beamType === 'VMAT' && b.gantryAngleStop != null ? `→${b.gantryAngleStop}` : ''}
                   </TableCell>
@@ -1319,6 +1357,16 @@ export default function EbrtWorkspace({
         </>
       )}
 
+      <ApprovalWizard
+        open={approvalWizard}
+        plan={selectedPlan}
+        onNextStatus={handleWizardApprove}
+        onDeltaCouch={handlePersistDeltaCouch}
+        getApprovalDoseSummary={ebrt.getApprovalDoseSummary}
+        getDeltaCouch={ebrt.getDeltaCouch}
+        getApprovalChecks={ebrt.getApprovalChecks}
+        onClose={() => setApprovalWizard(false)}
+      />
       <CoursePropsDialog
         open={coursePropsOpen}
         onClose={() => setCoursePropsOpen(false)}

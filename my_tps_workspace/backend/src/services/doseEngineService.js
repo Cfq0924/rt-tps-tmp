@@ -172,6 +172,7 @@ export async function computeWaterDose({ studyId, referenceDoseFileId, planId, p
   const SAD = 1000;
 
   for (const beam of plan.beams) {
+    if ((beam.purpose ?? 'TREATMENT') === 'SETUP') continue; // setup fields carry no dose
     const g = ((beam.gantryAngle ?? 0) * Math.PI) / 180;
     const dirX = -Math.sin(g), dirY = Math.cos(g); // beam axis, in-plane (IEC)
     const halfW = (beam.jawX2 != null && beam.jawX1 != null) ? (beam.jawX2 - beam.jawX1) / 2 : 50;
@@ -335,6 +336,7 @@ export async function computeWaterDoseV2({ studyId, referenceDoseFileId, planId,
   const beamInfo = [];
 
   for (const beam of plan.beams) {
+    if ((beam.purpose ?? 'TREATMENT') === 'SETUP') continue; // setup fields carry no dose
     const gantry = beam.gantryAngle ?? 0;
     const axes = beamAxes(gantry);
     const source = [iso.x - SAD * axes.dir[0], iso.y - SAD * axes.dir[1], iso.z - SAD * axes.dir[2]];

@@ -17,6 +17,9 @@ import {
 } from '../services/ebrtPlanService.js';
 import {
   approvalChecks,
+  approvalDoseSummary,
+  deltaCouchShiftsFromIso,
+  BEV_SETUP_PRESETS,
   captureRevision,
   listRevisions,
   getRevision,
@@ -443,6 +446,67 @@ router.post('/plans/:planId/opposing-field', authMiddleware, (req, res, next) =>
       reqId: req.id,
     });
     res.status(201).json({ beam });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /ebrt/plans/:planId/delta-couch — shifts calculated from the user origin
+router.get('/plans/:planId/delta-couch', authMiddleware, (req, res, next) => {
+  try {
+    const plan = getPlan({ id: parseInt(req.params.planId, 10), userId: req.user.userId, reqId: req.id });
+    const computed = deltaCouchShiftsFromIso(plan);
+    res.json({ ...computed, persisted: plan.deltaCouch ?? null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /ebrt/plans/:planId/approval-dose-summary — Planning Approval step 1
+router.get('/plans/:planId/approval-dose-summary', authMiddleware, async (req, res, next) => {
+  try {
+    const summary = await approvalDoseSummary({
+      planId: parseInt(req.params.planId, 10),
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json({ summary });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /ebrt/plans/:planId/setup-fields — Section 5: no-dose imaging fields
+// (AP kV-Setup / RT Lat kV-Setup presets), created from the plan and excluded
+// from dose calculation.
+router.post('/plans/:planId/setup-fields', authMiddleware, (req, res, next) => {
+  try {
+    const planId = parseInt(req.params.planId, 10);
+    const presets = Array.isArray(req.body?.presets) && req.body.presets.length
+      ? req.body.presets
+      : BEV_SETUP_PRESETS.map(p => p.name);
+    const created = [];
+    let plan = null;
+    for (const name of presets) {
+      const preset = BEV_SETUP_PRESETS.find(p => p.name === name);
+      if (!preset) continue;
+      plan = addBeam({
+        planId,
+        payload: {
+          name: preset.name,
+          beam_type: 'STATIC',
+          gantry_angle: preset.gantryAngle,
+          collimator_angle: 0,
+          jaw_x1: -50, jaw_x2: 50, jaw_y1: -50, jaw_y2: 50,
+          weight: 0,
+          purpose: 'SETUP',
+        },
+        userId: req.user.userId,
+        reqId: req.id,
+      });
+      created.push(preset.name);
+    }
+    res.status(201).json({ created, plan });
   } catch (err) {
     next(err);
   }

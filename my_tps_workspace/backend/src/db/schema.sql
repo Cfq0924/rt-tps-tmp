@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS ebrt_beams (
   weight REAL DEFAULT 1,
   wedge_angle REAL,
   bolus TEXT,
+  purpose TEXT DEFAULT 'TREATMENT',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(plan_id, beam_number)
 );

@@ -4,6 +4,7 @@ import { parseRTPlan } from './rtPlanService.js';
 import { getDicomFile } from './dicomService.js';
 import { parseRTStruct } from './rtStructService.js';
 import { latestFileByModality } from './dicomQuery.js';
+import { getDoseGrid } from './rtDoseService.js';
 
 /**
  * External-beam plan persistence (EBRT module).
@@ -82,6 +83,9 @@ export function validateBeamPayload(b = {}) {
   const wedge = num(b.wedge_angle);
   if (wedge !== null && (wedge < 0 || wedge > 360)) return 'wedge_angle must be within 0..360°';
   if (b.bolus !== undefined && b.bolus !== null && typeof b.bolus !== 'string') return 'bolus must be a string';
+  if (b.purpose !== undefined && !['TREATMENT', 'SETUP'].includes(String(b.purpose).toUpperCase())) {
+    return 'purpose must be TREATMENT or SETUP';
+  }
   return null;
 }
 
@@ -165,7 +169,7 @@ function getPlanWithBeams(db, id) {
   plan.deltaCouchJson = undefined;
   delete plan.referencePointsJson;
   plan.beams = db.prepare(`
-    SELECT id, plan_id as planId, beam_number as beamNumber, name, beam_type as beamType,
+    SELECT id, plan_id as planId, beam_number as beamNumber, name, beam_type as beamType, purpose,
            energy_mv as energyMv, gantry_angle as gantryAngle, gantry_angle_stop as gantryAngleStop,
            collimator_angle as collimatorAngle, couch_angle as couchAngle,
            jaw_x1 as jawX1, jaw_x2 as jawX2, jaw_y1 as jawY1, jaw_y2 as jawY2, weight,
@@ -345,11 +349,12 @@ export function addBeam({ planId, payload = {}, userId, reqId }) {
     throw Object.assign(new Error(`plan cannot exceed ${MAX_BEAMS} beams`), { status: 400 });
   }
 
+  const purpose = str(payload.purpose, 'TREATMENT').toUpperCase();
   const info = db.prepare(`
     INSERT INTO ebrt_beams (plan_id, beam_number, name, beam_type, energy_mv, gantry_angle,
       gantry_angle_stop, collimator_angle, couch_angle, jaw_x1, jaw_x2, jaw_y1, jaw_y2, weight,
-      wedge_angle, bolus)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      wedge_angle, bolus, purpose)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     planId,
     nextNumber,
@@ -364,7 +369,8 @@ export function addBeam({ planId, payload = {}, userId, reqId }) {
     num(payload.jaw_y1, -50), num(payload.jaw_y2, 50),
     num(payload.weight, 1),
     num(payload.wedge_angle),
-    str(payload.bolus)
+    str(payload.bolus),
+    purpose
   );
 
   auditLog(db, { reqId, userId, action: 'add_ebrt_beam', resourceType: 'ebrt_beam', resourceId: info.lastInsertRowid, metadata: { planId, beamNumber: nextNumber } });
@@ -383,13 +389,13 @@ export function updateBeam({ beamId, payload = {}, userId, reqId }) {
 
   const allowed = ['name', 'beam_type', 'energy_mv', 'gantry_angle', 'gantry_angle_stop',
     'collimator_angle', 'couch_angle', 'jaw_x1', 'jaw_x2', 'jaw_y1', 'jaw_y2', 'weight',
-    'wedge_angle', 'bolus'];
+    'wedge_angle', 'bolus', 'purpose'];
   const updates = [];
   const values = [];
   for (const k of allowed) {
     if (payload[k] === undefined) continue;
     updates.push(`${k} = ?`);
-    values.push(k === 'beam_type' ? String(payload[k]).toUpperCase() : payload[k]);
+    values.push(k === 'beam_type' || k === 'purpose' ? String(payload[k]).toUpperCase() : payload[k]);
   }
   if (updates.length === 0) {
     throw Object.assign(new Error('no updatable fields provided'), { status: 400 });
@@ -672,6 +678,164 @@ export function approvalChecks({ planId, userId, reqId }) {
     warnings,
     canApprove: errors.length === 0,
   };
+}
+
+// ---------- Section 9: Delta Couch Shift + Planning Approval dose summary ----------
+
+export const BEV_SETUP_PRESETS = [
+  { name: 'AP kV-Setup', gantryAngle: 0 },
+  { name: 'RT Lat kV-Setup', gantryAngle: 270 },
+];
+
+/**
+ * Delta couch shifts calculated from the user origin (DICOM 0,0,0), Varian
+ * couch conventions for HFS: Lat = −x, Lng = −y, Vrt = −z (cm).
+ * Setup fields are listed first as the reference setup positions, then the
+ * treatment fields — all share the plan-level shift (Eclipse Delta Couch
+ * Shift table layout).
+ */
+export function deltaCouchShiftsFromIso(plan) {
+  const iso = { x: plan.isocenterX ?? 0, y: plan.isocenterY ?? 0, z: plan.isocenterZ ?? 0 };
+  const shifts = {
+    couchVrtCm: Math.round((-iso.z / 10) * 10) / 10,
+    couchLngCm: Math.round((-iso.y / 10) * 10) / 10,
+    couchLatCm: Math.round((-iso.x / 10) * 10) / 10,
+  };
+  const fields = [
+    ...plan.beams.filter(b => b.purpose === 'SETUP').map(b => ({ fieldId: b.name, kind: 'SETUP' })),
+    ...plan.beams.filter(b => b.purpose !== 'SETUP').map(b => ({ fieldId: `Field ${b.beamNumber}`, kind: 'TREATMENT' })),
+  ];
+  return { planId: plan.id, planName: plan.name, userOrigin: { x: 0, y: 0, z: 0 }, shifts, fields };
+}
+
+function pointInPolygon(x, y, poly) {
+  let inside = false;
+  const n = poly.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = poly[i * 2], yi = poly[i * 2 + 1];
+    const xj = poly[j * 2], yj = poly[j * 2 + 1];
+    if (((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Planning Approval — Dose Summary (manual p322): plan/course identification,
+ * prescription rows (plan + primary reference point) and 3D dose statistics
+ * (min/mean/max, cGy and % of prescription) for the plan target structure,
+ * sampled from the study's latest calculated RTDOSE grid.
+ */
+export async function approvalDoseSummary({ planId, userId, reqId }) {
+  const plan = getPlan({ id: planId, userId, reqId });
+  const db = getDb();
+  const course = plan.courseId
+    ? db.prepare('SELECT id, name, intent FROM courses WHERE id = ?').get(plan.courseId)
+    : null;
+
+  const summary = {
+    planId: plan.id,
+    course: course ? { id: course.id, name: course.name } : null,
+    planName: plan.name,
+    dosePerFractionCgy: plan.dosePerFractionGy != null
+      ? Math.round(plan.dosePerFractionGy * 100)
+      : (plan.prescriptionDoseGy != null && plan.numberOfFractions
+        ? Math.round((plan.prescriptionDoseGy / plan.numberOfFractions) * 100)
+        : null),
+    numberOfFractions: plan.numberOfFractions ?? null,
+    totalDoseCgy: plan.prescriptionDoseGy != null ? Math.round(plan.prescriptionDoseGy * 100) : null,
+    targetVolume: plan.targetStructureName ?? null,
+    primaryReferencePoint: plan.referencePoints?.find(p => p.isDpv)?.name ?? plan.primaryPointName ?? null,
+    prescriptionCgy: plan.prescriptionDoseGy != null ? Math.round(plan.prescriptionDoseGy * 100) : null,
+    statistics: null,
+  };
+
+  try {
+    const targetName = plan.targetStructureName;
+    const doseFile = db.prepare(`
+      SELECT id FROM dicom_files WHERE study_id = ? AND modality = 'RTDOSE' ORDER BY id DESC LIMIT 1
+    `).get(plan.studyId);
+    if (!targetName || !doseFile) return summary;
+
+    const grid = await getDoseGrid(doseFile.id, {}, reqId);
+    const rt = latestFileByModality(db, plan.studyId, 'RTSTRUCT');
+    if (!rt) return summary;
+    const { roiSequence, contourSequence } = await parseRTStruct(rt.file_path);
+    const roi = roiSequence.find(r => r.roiName === targetName);
+    if (!roi) return summary;
+
+    // group polygon contours by z (mm): one z may carry several disjoint
+    // polygons (split targets) — containment is the union of them
+    const byZ = new Map();
+    for (const c of contourSequence) {
+      if (c.referencedROINumber !== roi.roiNumber) continue;
+      const z = c.contourData[2];
+      let list = byZ.get(z);
+      if (!list) { list = []; byZ.set(z, list); }
+      const flat = [];
+      for (let p = 0; p + 2 < c.contourData.length; p += 3) {
+        flat.push(c.contourData[p], c.contourData[p + 1]);
+      }
+      if (flat.length >= 6) list.push(flat);
+    }
+    if (byZ.size === 0) return summary;
+
+    const { rows, columns, numberOfFrames, imagePosition, pixelSpacing, gridFrameOffsetVector } = grid;
+    const dose = grid.grid;
+    const zTol = Math.abs(gridFrameOffsetVector[1] - gridFrameOffsetVector[0] ?? 1) || 1.5;
+    let mn = Infinity, mx = -Infinity, sum = 0, n = 0;
+    for (let k = 0; k < numberOfFrames; k++) {
+      const z = imagePosition.z + (gridFrameOffsetVector[k] ?? 0);
+      // polygons of the nearest contour slice for this frame
+      let best = null, bestD = Infinity;
+      for (const [zc, polys] of byZ) {
+        const d = Math.abs(zc - z);
+        if (d < bestD) { bestD = d; best = polys; }
+      }
+      if (!best || bestD > zTol) continue;
+      const off = k * rows * columns;
+      for (const poly of best) {
+        // bounding-box culling: only grid points inside the polygon's bbox
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (let p = 0; p < poly.length; p += 2) {
+          if (poly[p] < minX) minX = poly[p];
+          if (poly[p] > maxX) maxX = poly[p];
+          if (poly[p + 1] < minY) minY = poly[p + 1];
+          if (poly[p + 1] > maxY) maxY = poly[p + 1];
+        }
+        const j0 = Math.max(0, Math.ceil((minY - imagePosition.y) / pixelSpacing.i));
+        const j1 = Math.min(rows - 1, Math.floor((maxY - imagePosition.y) / pixelSpacing.i));
+        const i0 = Math.max(0, Math.ceil((minX - imagePosition.x) / pixelSpacing.j));
+        const i1 = Math.min(columns - 1, Math.floor((maxX - imagePosition.x) / pixelSpacing.j));
+        for (let j = j0; j <= j1; j++) {
+          const y = imagePosition.y + j * pixelSpacing.i;
+          for (let i = i0; i <= i1; i++) {
+            const x = imagePosition.x + i * pixelSpacing.j;
+            if (pointInPolygon(x, y, poly)) {
+              const v = dose[off + j * columns + i];
+              if (v < mn) mn = v;
+              if (v > mx) mx = v;
+              sum += v; n++;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (n === 0) return summary;
+    const rxCgy = summary.prescriptionCgy || null;
+    const pct = (v) => (rxCgy ? Math.round((v / rxCgy) * 1000) / 10 : null);
+    summary.statistics = {
+      structureId: targetName,
+      voxelCount: n,
+      min: { cgy: Math.round(mn * 10) / 10, pct: pct(mn) },
+      mean: { cgy: Math.round((sum / n) * 10) / 10, pct: pct(sum / n) },
+      max: { cgy: Math.round(mx * 10) / 10, pct: pct(mx) },
+      doseMax: { cgy: Math.round(grid.maxDose * 10) / 10, pct: pct(grid.maxDose) },
+    };
+  } catch {
+    // statistics are best-effort — the summary stands without them
+  }
+  return summary;
 }
 
 /** Append a snapshot of the plan (scalars + beams + reference points). */

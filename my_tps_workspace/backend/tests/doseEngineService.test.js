@@ -202,6 +202,28 @@ describe('doseEngineService', () => {
       db.prepare("UPDATE ebrt_plans SET calc_models_json = NULL WHERE id = ?").run(ctx.planId);
     });
 
+    it('excludes SETUP-purpose fields from the dose (Eclipse Section 5)', async () => {
+      const before = result;
+      // add a setup field with huge jaws — must contribute no dose
+      await (await import('../src/services/ebrtPlanService.js')).addBeam({
+        planId: ctx.planId,
+        payload: { name: 'AP kV-Setup', beam_type: 'STATIC', gantry_angle: 0,
+                   jaw_x1: -400, jaw_x2: 400, jaw_y1: -400, jaw_y2: 400,
+                   weight: 5, purpose: 'SETUP' },
+        userId: 1, reqId: 't',
+      });
+      const after = await svc.computeAndStoreDose({
+        studyId: STUDY_ID,
+        referenceDoseFileId: ctx.referenceDoseFileId,
+        planId: ctx.planId,
+        prescriptionCgy: 200,
+        userId: 1,
+        reqId: 't',
+      });
+      assert.strictEqual(after.beams, before.beams, 'setup beam must not be counted');
+      assert.strictEqual(after.maxDoseCgy, before.maxDoseCgy, 'setup beam must not change dose');
+    });
+
     it('keeps every voxel non-negative and stores a parseable file', async () => {
       const { getDoseGrid } = await import('../src/services/rtDoseService.js');
       const grid = await getDoseGrid(result.doseFileId, {}, 't');

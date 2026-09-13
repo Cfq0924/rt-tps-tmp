@@ -23,6 +23,7 @@ export function useEbrtPlans({ studyId, enabled }) {
     const res = await fetch(url, {
       method,
       credentials: 'include',
+      cache: 'no-store', // approval/dose views must never serve stale GETs
       headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -37,10 +38,10 @@ export function useEbrtPlans({ studyId, enabled }) {
   // full beams array via selectPlan()
   const selectedPlan = plans.find(p => p.id === selectedPlanId) ?? null;
 
-  const selectPlan = useCallback(async (planId) => {
+  const selectPlan = useCallback(async (planId, { force = false } = {}) => {
     setSelectedPlanId(planId);
     const current = plans.find(p => p.id === planId);
-    if (current?.beams) return; // already hydrated
+    if (current?.beams && !force) return; // already hydrated
     const { plan } = await postJson(`/api/ebrt/plans/${planId}`, undefined, 'GET', 'Failed to load plan');
     setPlans(prev => prev.map(p => (p.id === plan.id ? plan : p)));
   }, [plans, postJson]);
@@ -151,7 +152,7 @@ export function useEbrtPlans({ studyId, enabled }) {
   /** Create the 180° opposing field from a source beam number. */
   const addOpposingField = useCallback(async (planId, sourceBeamNumber, name) => {
     const data = await postJson(`/api/ebrt/plans/${planId}/opposing-field`, { sourceBeamNumber, name });
-    await selectPlan(planId); // rehydrate the plan with the new beam
+    await selectPlan(planId, { force: true }); // rehydrate the plan with the new beam
     return data.beam ?? data;
   }, [postJson, selectPlan]);
 
@@ -192,6 +193,25 @@ export function useEbrtPlans({ studyId, enabled }) {
     return data.checks ?? data;
   }, [postJson]);
 
+  /** Section 5: create the orthogonal no-dose imaging fields (AP + RT Lat). */
+  const addSetupFields = useCallback(async (planId, presets) => {
+    const data = await postJson(`/api/ebrt/plans/${planId}/setup-fields`, presets?.length ? { presets } : {});
+    await selectPlan(planId, { force: true });
+    return data;
+  }, [postJson, selectPlan]);
+
+  /** Section 9: delta couch shifts calculated from the user origin. */
+  const getDeltaCouch = useCallback(async (planId) => {
+    const data = await postJson(`/api/ebrt/plans/${planId}/delta-couch`, undefined, 'GET');
+    return data;
+  }, [postJson]);
+
+  /** Section 9: Planning Approval — Dose Summary payload. */
+  const getApprovalDoseSummary = useCallback(async (planId) => {
+    const data = await postJson(`/api/ebrt/plans/${planId}/approval-dose-summary`, undefined, 'GET');
+    return data.summary ?? data;
+  }, [postJson]);
+
   const listRevisions = useCallback(async (planId) => {
     const data = await postJson(`/api/ebrt/plans/${planId}/revisions`, undefined, 'GET');
     return data.revisions ?? [];
@@ -226,7 +246,7 @@ export function useEbrtPlans({ studyId, enabled }) {
     listSubfields, addSubfield, removeSubfield, updateSubfield,
     getControlPoints, saveControlPoints, addCouchStructure,
     getApprovalChecks, listRevisions, captureRevision, rollbackRevision,
-    getPointDoses,
+    getPointDoses, addSetupFields, getDeltaCouch, getApprovalDoseSummary,
   };
 }
 
