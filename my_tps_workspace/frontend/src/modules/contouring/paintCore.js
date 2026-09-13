@@ -424,15 +424,18 @@ export function expandMask3D(mask, cols, rows, marginPx, zLayers, getSlice, setS
 }
 
 /**
- * Convert a cornerstone image's raw pixel data to HU by applying
- * rescale slope/intercept. getPixelData() returns *stored* values — for CT
- * these are shifted (typically intercept −1024), so absolute-HU operations
- * (flood fill tolerance, body threshold −300) must go through this.
+ * Convert a cornerstone image's pixel data to HU. CS3D's loader pre-scales
+ * pixel data in place (image.preScale.scaled) — slope/intercept are already
+ * applied and metadata keeps the DICOM tags, so re-applying them shifts CT
+ * by a full intercept. Only unscaled images need the rescale here.
+ * Absolute-HU operations (flood fill tolerance, body threshold −300) and
+ * the MPR volume must go through this.
  * @param {Object} image - cornerstone image (cache.getImage result)
  * @returns {Float32Array} HU values
  */
 export function imageToHU(image) {
   const px = image.getPixelData();
+  if (image.preScale?.scaled) return Float32Array.from(px);
   const slope = image.slope ?? 1;
   const intercept = image.intercept ?? 0;
   return Float32Array.from(px, v => v * slope + intercept);

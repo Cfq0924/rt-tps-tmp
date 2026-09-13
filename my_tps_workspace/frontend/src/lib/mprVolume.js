@@ -78,8 +78,28 @@ export function sliceSpacing(geom) {
 }
 
 /**
+ * Normalize a cornerstone VOI ({windowCenter, windowWidth} — number or
+ * {lower, upper} range) to rounded {wc, ww}; null when unusable.
+ */
+export function voiToWL(voi) {
+  const num = (v) => {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    if (v && typeof v === 'object' && Number.isFinite(v.lower) && Number.isFinite(v.upper)) {
+      return (v.lower + v.upper) / 2;
+    }
+    return null;
+  };
+  const wc = num(voi?.windowCenter);
+  const ww = num(voi?.windowWidth);
+  if (wc == null || ww == null || ww <= 0) return null;
+  return { wc: Math.round(wc), ww: Math.round(ww) };
+}
+
+/**
  * Coronal plane at row index yIdx: output (width = cols along x,
- * height = numSlices along z). Row k of the output is slice k.
+ * height = numSlices along z). Row k of the output is a 3-slice slab
+ * average centred on slice k — thick-slab MPR smoothing (Eclipse-like);
+ * without it, 3 mm slices at high zoom show hard air/tissue banding.
  */
 export function sampleCoronal(volume, geom, yIdx) {
   const { cols, numSlices, rows } = geom;
@@ -87,8 +107,10 @@ export function sampleCoronal(volume, geom, yIdx) {
   const out = new Float32Array(cols * numSlices);
   for (let k = 0; k < numSlices; k++) {
     const sliceOff = k * rows * cols + y * cols;
+    const kLo = Math.max(0, k - 1) * rows * cols;
+    const kHi = Math.min(numSlices - 1, k + 1) * rows * cols;
     for (let i = 0; i < cols; i++) {
-      out[k * cols + i] = volume[sliceOff + i];
+      out[k * cols + i] = (volume[sliceOff + i] + volume[kLo + y * cols + i] + volume[kHi + y * cols + i]) / 3;
     }
   }
   return { pixels: out, width: cols, height: numSlices };
@@ -96,7 +118,7 @@ export function sampleCoronal(volume, geom, yIdx) {
 
 /**
  * Sagittal plane at column index xIdx: output (width = rows along y,
- * height = numSlices along z).
+ * height = numSlices along z). 3-slice slab average as above.
  */
 export function sampleSagittal(volume, geom, xIdx) {
   const { cols, numSlices, rows } = geom;
@@ -104,8 +126,11 @@ export function sampleSagittal(volume, geom, xIdx) {
   const out = new Float32Array(rows * numSlices);
   for (let k = 0; k < numSlices; k++) {
     const sliceOff = k * rows * cols;
+    const kLo = Math.max(0, k - 1) * rows * cols;
+    const kHi = Math.min(numSlices - 1, k + 1) * rows * cols;
     for (let j = 0; j < rows; j++) {
-      out[k * rows + j] = volume[sliceOff + j * cols + x];
+      out[k * rows + j] = (volume[sliceOff + j * cols + x]
+        + volume[kLo + j * cols + x] + volume[kHi + j * cols + x]) / 3;
     }
   }
   return { pixels: out, width: rows, height: numSlices };

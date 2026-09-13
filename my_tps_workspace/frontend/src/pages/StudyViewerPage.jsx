@@ -29,7 +29,7 @@ import RegistrationPanel from '../modules/registration/RegistrationPanel.jsx';
 import PlanSums from '../modules/doseSum/PlanSums.jsx';
 import MPRView from '../modules/mpr/MPRView.jsx';
 import MPRContourLayer from '../modules/mpr/MPRContourLayer.jsx';
-import { loadVolume } from '../lib/mprVolume.js';
+import { loadVolume, voiToWL } from '../lib/mprVolume.js';
 import EbrtLeftTree from '../modules/ebrt/EbrtLeftTree.jsx';
 import EbrtInfoTabs from '../modules/ebrt/EbrtInfoTabs.jsx';
 import AxialCrosshairOverlay from '../modules/ebrt/AxialCrosshairOverlay.jsx';
@@ -126,6 +126,9 @@ export default function StudyViewerPage() {
   const [mprEnabled, setMprEnabled] = useState(false);
   const [mprState, setMprState] = useState({ volume: null, geom: null, progress: null, error: '' });
   const [crosshair, setCrosshair] = useState({ xIdx: 256, yIdx: 256 });
+  // Shared MPR/axial window level (null → MPRView default); written by the
+  // axial WindowLevel tool and MPR right-drag, auto-adopted from the image VOI
+  const [windowLevel, setWindowLevel] = useState(null);
   // M5 point dose probe (evaluation module)
   const [doseProbeEnabled, setDoseProbeEnabled] = useState(false);
   const [doseProbe, setDoseProbe] = useState(null); // { point, doseCgy, pctRx }
@@ -672,6 +675,44 @@ export default function StudyViewerPage() {
     }
   }, [viewportInstance]);
 
+  // P4-M4: coronal/sagittal MPR panes share the axial window/level. The
+  // displayed image's DICOM VOI is adopted automatically; the axial
+  // WindowLevel tool (right-drag) propagates via VOI_MODIFIED, and MPR
+  // right-drag writes the same state through onWindowLevelChange.
+  useEffect(() => {
+    const vp = viewportInstance;
+    if (!vp) return undefined;
+    const readVoi = () => {
+      try {
+        if (!vp.getCurrentImageId?.()) return null;
+        const pr = vp.getProperties?.() ?? {};
+        // CS3D 4.x keeps the window as voiRange {lower, upper}; older voi
+        // ({windowCenter, windowWidth}) kept as a fallback
+        const voi = pr.voiRange ?? pr.voi;
+        if (voi && typeof voi === 'object' && Number.isFinite(voi.lower) && Number.isFinite(voi.upper)) {
+          return voiToWL({ windowCenter: (voi.lower + voi.upper) / 2, windowWidth: voi.upper - voi.lower });
+        }
+        return voiToWL(voi);
+      } catch {
+        return null;
+      }
+    };
+    const onVoi = () => {
+      const v = readVoi();
+      if (v) setWindowLevel(v);
+    };
+    // adopt once an image is on screen; keep manual/user values until then
+    const adopt = () => setWindowLevel((prev) => prev ?? readVoi());
+    adopt();
+    const el = vp.element;
+    el?.addEventListener(cornerstone.Enums.Events.VOI_MODIFIED, onVoi);
+    el?.addEventListener(cornerstone.Enums.Events.IMAGE_RENDERED, adopt);
+    return () => {
+      el?.removeEventListener(cornerstone.Enums.Events.VOI_MODIFIED, onVoi);
+      el?.removeEventListener(cornerstone.Enums.Events.IMAGE_RENDERED, adopt);
+    };
+  }, [viewportInstance]);
+
   function handleDoseVisibleChange(nextVisible) {
     setDoseVisible(nextVisible);
     // Grid (~6MB) downloads on first enable; cached afterwards
@@ -1100,6 +1141,8 @@ export default function StudyViewerPage() {
               sliceIdx={currentImageIndex}
               onCrosshairChange={handleMprCrosshair}
               dose={mprDoseProps}
+              wl={windowLevel ?? undefined}
+              onWindowLevelChange={setWindowLevel}
               masterViewport={viewportInstance}
               iso={mprIso}
               structureLines={structureOverlayPolygons}
@@ -1116,6 +1159,8 @@ export default function StudyViewerPage() {
               sliceIdx={currentImageIndex}
               onCrosshairChange={handleMprCrosshair}
               dose={mprDoseProps}
+              wl={windowLevel ?? undefined}
+              onWindowLevelChange={setWindowLevel}
               masterViewport={viewportInstance}
               iso={mprIso}
               structureLines={structureOverlayPolygons}
@@ -1146,6 +1191,8 @@ export default function StudyViewerPage() {
                 sliceIdx={currentImageIndex}
                 onCrosshairChange={handleMprCrosshair}
                 dose={mprDoseProps}
+                wl={windowLevel ?? undefined}
+                onWindowLevelChange={setWindowLevel}
                 masterViewport={viewportInstance}
                 iso={mprIso}
                 structureLines={structureOverlayPolygons}
@@ -1184,6 +1231,8 @@ export default function StudyViewerPage() {
                 sliceIdx={currentImageIndex}
                 onCrosshairChange={handleMprCrosshair}
                 dose={mprDoseProps}
+                wl={windowLevel ?? undefined}
+                onWindowLevelChange={setWindowLevel}
                 masterViewport={viewportInstance}
                 iso={mprIso}
                 structureLines={structureOverlayPolygons}

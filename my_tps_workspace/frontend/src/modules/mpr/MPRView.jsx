@@ -25,6 +25,10 @@ import { structurePlaneSegments } from '../../lib/contourPlaneIntersection.js';
  *  - coronal: horizontal = x (R→L), vertical = slices (H→F), wheel = yIdx
  *  - sagittal: horizontal = y (A→P), vertical = slices (H→F), wheel = xIdx
  *
+ * Left-drag moves the crosshair, wheel scrolls the plane stack, right-drag
+ * adjusts window level (width = horizontal, centre = vertical) — the same
+ * binding as the axial viewport's WindowLevel tool.
+ *
  * @param {Object} props
  * @param {'coronal'|'sagittal'} props.orientation
  * @param {Object|null} props.volumeState - { volume, geom, progress, error }
@@ -33,6 +37,7 @@ import { structurePlaneSegments } from '../../lib/contourPlaneIntersection.js';
  * @param {Function} props.onCrosshairChange - ({xIdx?, yIdx?, sliceIdx?}) => void
  * @param {Object|null} props.dose - { grid, geom, doseAtFull, opacity } | null
  * @param {{wc:number, ww:number}} props.wl
+ * @param {Function} [props.onWindowLevelChange] - ({wc, ww}) => void on right-drag
  * @param {Object|null} props.masterViewport - axial viewport (zoom master)
  * @param {Array|null} props.iso - isocentre patient mm [x, y, z]
  */
@@ -44,11 +49,13 @@ export default function MPRView({
   onCrosshairChange,
   dose = null,
   wl = { wc: 40, ww: 400 },
+  onWindowLevelChange,
   masterViewport = null,
   iso = null,
   structureLines = [],
 }) {
   const canvasRef = useRef(null);
+  const wlDragRef = useRef(null);
   const { volume, geom } = volumeState ?? {};
   const isCoronal = orientation === 'coronal';
 
@@ -177,12 +184,29 @@ export default function MPRView({
         );
       }
 
+      // z-interpolated vertical upscale: the offscreen holds one row per
+      // slice; stretch it to device rows with bilinear filtering FIRST so
+      // 3 mm slice gaps become smooth gradients (Eclipse-like MPR). The
+      // stretched image is placed in device space with the signed vt.d
+      // scale — row 0 stays at vt.f and rows advance head-up, matching
+      // the crosshair/contour overlays; midH is clamped to the canvas
+      // height limit at extreme zoom (drawImage just re-stretches then).
+      const devPerSlice = Math.abs(vt.d) * dpr;
+      const midH = Math.min(16384, Math.max(1, Math.round(geom.numSlices * devPerSlice)));
+      const mid = document.createElement('canvas');
+      mid.width = width;
+      mid.height = midH;
+      const mctx = mid.getContext('2d');
+      mctx.imageSmoothingEnabled = true;
+      mctx.drawImage(off, 0, 0, width, midH);
+
+      const drawW = vt.a * dpr * width;
+      const drawH = vt.d * dpr * geom.numSlices;
       ctx.imageSmoothingEnabled = true;
-      ctx.save();
-      ctx.setTransform(vt.a * dpr, 0, 0, vt.d * dpr, vt.e * dpr, vt.f * dpr);
-      ctx.drawImage(off, 0, 0);
-      if (doseCanvas) ctx.drawImage(doseCanvas, 0, 0);
-      ctx.restore();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(mid, vt.e * dpr, vt.f * dpr, drawW, drawH);
+      if (doseCanvas) ctx.drawImage(doseCanvas, vt.e * dpr, vt.f * dpr, drawW, drawH);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       // RTSTRUCT silhouette lines: polygon ∩ plane, drawn in device space
       if (structureLines.length > 0) {
@@ -275,12 +299,41 @@ export default function MPRView({
     }
   };
 
+  /** Right-drag window/level: dx → width, dy → centre (cornerstone feel). */
+  const handleWLPointer = (e) => {
+    const s = wlDragRef.current;
+    if (!s) return;
+    if (!(e.buttons & 2)) {
+      wlDragRef.current = null;
+      return;
+    }
+    const k = Math.max(0.5, s.ww / 200);
+    const ww = Math.round(Math.min(4000, Math.max(1, s.ww + (e.clientX - s.x) * k)));
+    const wc = Math.round(Math.min(6000, Math.max(-2000, s.wc - (e.clientY - s.y) * k)));
+    onWindowLevelChange?.({ wc, ww });
+  };
+
   return (
     <Box
       sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden' }}
       onWheel={handleWheel}
-      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); handlePointer(e); }}
-      onPointerMove={(e) => { if (e.buttons === 1) handlePointer(e); }}
+      onContextMenu={(e) => e.preventDefault()}
+      onPointerDown={(e) => {
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic/released pointer */ }
+        if (e.button === 2) {
+          wlDragRef.current = { x: e.clientX, y: e.clientY, wc: wl.wc, ww: wl.ww };
+        } else {
+          handlePointer(e);
+        }
+      }}
+      onPointerMove={(e) => {
+        if (wlDragRef.current) {
+          handleWLPointer(e);
+          return;
+        }
+        if (e.buttons === 1) handlePointer(e);
+      }}
+      onPointerUp={() => { wlDragRef.current = null; }}
     >
       <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none' }} />
       <Typography variant="caption" sx={{ position: 'absolute', right: 6, bottom: 4, fontSize: '0.55rem',
