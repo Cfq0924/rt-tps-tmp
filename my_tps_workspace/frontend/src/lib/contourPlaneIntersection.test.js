@@ -60,26 +60,51 @@ describe('structurePlaneSegments', () => {
     zPositions: [-100, -98, -96], // ascending, 2 mm
   };
 
-  const SQUARE_LOW = SQUARE.map((v, i) => (i % 3 === 2 ? -98 : v)); // z on a geom slice
+  const squareAt = (z) => SQUARE.map((v, i) => (i % 3 === 2 ? z : v));
+  const SQUARE_LOW = squareAt(-98);
+  const SQUARE_HIGH = squareAt(-96);
 
-  it('converts patient segments to coronal pane index space', () => {
-    // square spans x 0..4, y 0..4 at z=-98; coronal pane at yIdx=61 → y=+1
+  it('single ring yields no wall (silhouette needs two levels)', () => {
     const segs = structurePlaneSegments([SQUARE_LOW], 'coronal', 61, geom);
-    expect(segs.length).toBe(1);
-    const [a, b] = [segs[0].a, segs[0].b];
-    // u: patient x 0..4 → index (0-(-60))/1=60 .. 64; v: z=-98 → slice 1
-    const us = [a[0], b[0]].sort((p, q) => p - q);
-    expect(us[0]).toBeCloseTo(60, 6);
-    expect(us[1]).toBeCloseTo(64, 6);
-    expect(a[1]).toBeCloseTo(1, 6);
-    expect(b[1]).toBeCloseTo(1, 6);
+    expect(segs).toEqual([]);
+  });
+
+  it('stacked rings connect into coronal walls in pane index space', () => {
+    // squares span x 0..4, y 0..4 at z=-98 (slice 1) and z=-96 (slice 2);
+    // coronal pane at yIdx=61 → y=+1 crosses both
+    const segs = structurePlaneSegments([SQUARE_LOW, SQUARE_HIGH], 'coronal', 61, geom);
+    expect(segs.length).toBe(2);
+    const pts = segs.flatMap(s => [s.a, s.b]);
+    // u: patient x 0 and 4 → index 60 and 64; v: z=-98 → 1, z=-96 → 2
+    for (const p of pts) {
+      expect([60, 64]).toContain(Math.round(p[0]));
+      expect([1, 2]).toContain(p[1]);
+    }
+    for (const side of [60, 64]) {
+      const wall = segs.find(s => Math.round(s.a[0]) === side && Math.round(s.b[0]) === side);
+      expect(wall).toBeDefined();
+      expect([wall.a[1], wall.b[1]].sort()).toEqual([1, 2]);
+    }
+  });
+
+  it('bilateral rings pair with the nearest ring on the next level', () => {
+    // two rings on each of two levels: left at x 0..4, right at x 10..14
+    const shiftX = (poly, dx) => poly.map((v, i) => (i % 3 === 0 ? v + dx : v));
+    const segs = structurePlaneSegments(
+      [squareAt(-98), shiftX(squareAt(-98), 10), squareAt(-96), shiftX(squareAt(-96), 10)],
+      'coronal', 61, geom,
+    );
+    // left and right walls for each of the two rings = 4 segments
+    expect(segs.length).toBe(4);
+    const us = segs.flatMap(s => [s.a[0], s.b[0]]).map(u => Math.round(u)).sort((a, b) => a - b);
+    expect(us).toEqual([60, 60, 64, 64, 70, 70, 74, 74]);
   });
 
   it('sagittal pane uses y as the in-plane axis', () => {
-    const segs = structurePlaneSegments([SQUARE_LOW], 'sagittal', 62, geom); // x = -58
-    expect(segs.length).toBe(1);
-    const us = [segs[0].a[0], segs[0].b[0]].sort((p, q) => p - q);
+    const segs = structurePlaneSegments([SQUARE_LOW, SQUARE_HIGH], 'sagittal', 62, geom); // x = -58
+    expect(segs.length).toBe(2);
+    const us = segs.flatMap(s => [s.a[0], s.b[0]]).sort((p, q) => p - q);
     expect(us[0]).toBeCloseTo(60, 6); // patient y 0 → index 60
-    expect(us[1]).toBeCloseTo(64, 6); // patient y 4 → index 64
+    expect(us[us.length - 1]).toBeCloseTo(64, 6); // patient y 4 → index 64
   });
 });

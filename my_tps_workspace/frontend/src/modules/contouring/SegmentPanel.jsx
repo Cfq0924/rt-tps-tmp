@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import {
   Box, Typography, Checkbox, IconButton, Button, TextField, Tooltip,
-  Menu, MenuItem, Divider, Chip,
+  Menu, MenuItem, Chip, Divider,
 } from '@mui/material';
-import { Add, Delete, Undo, Redo, Save, Layers, Lock, LockOpen, MenuBook } from '@mui/icons-material';
+import { Add, Delete, Layers, Lock, LockOpen, MenuBook } from '@mui/icons-material';
 import { STRUCTURE_DICTIONARY, ROI_TYPES, inferTypeFromName } from './structureDictionary.js';
 
 const SEGMENT_PALETTE = ['#ff5c5c', '#ff9f43', '#f6c177', '#9ae66e', '#5cc8ff', '#c792ea'];
@@ -20,13 +20,6 @@ const SEGMENT_PALETTE = ['#ff5c5c', '#ff9f43', '#f6c177', '#9ae66e', '#5cc8ff', 
  * @param {Function} props.onUpdateSegment - (id, patch) => void
  * @param {Function} props.onDeleteSegment - (id) => void
  * @param {Function} props.onSelectSegment - (id) => void
- * @param {Function} props.onUndo
- * @param {Function} props.onRedo
- * @param {boolean} props.canUndo
- * @param {boolean} props.canRedo
- * @param {Function} props.onSave
- * @param {boolean} props.saving
- * @param {boolean} props.dirty
  */
 export default function SegmentPanel({
   segments,
@@ -36,16 +29,11 @@ export default function SegmentPanel({
   onUpdateSegment,
   onDeleteSegment,
   onSelectSegment,
-  onUndo,
-  onRedo,
-  canUndo,
-  canRedo,
-  onSave,
-  saving,
-  dirty,
 }) {
   const [dictAnchor, setDictAnchor] = useState(null);
   const [dictFilter, setDictFilter] = useState('');
+  // { segId, anchorEl } while an InterpretedType picker is open
+  const [typeMenu, setTypeMenu] = useState(null);
 
   const addSegment = () => {
     const used = new Set(segments.map(s => s.color));
@@ -75,39 +63,6 @@ export default function SegmentPanel({
         SEGMENTS ({segments.length})
       </Typography>
 
-      {/* history + save actions */}
-      <Box sx={{ px: 1, py: 0.75, display: 'flex', gap: 0.5 }}>
-        <Tooltip title="Undo (Ctrl+Z)">
-          <span>
-            <IconButton size="small" onClick={onUndo} disabled={!canUndo} sx={{ color: 'primary.main' }}>
-              <Undo fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Tooltip title="Redo (Ctrl+Y)">
-          <span>
-            <IconButton size="small" onClick={onRedo} disabled={!canRedo} sx={{ color: 'primary.main' }}>
-              <Redo fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Box sx={{ flex: 1 }} />
-        <Tooltip title={dirty ? 'Save contours' : 'No changes'}>
-          <span>
-            <Button
-              size="small"
-              variant={dirty ? 'contained' : 'outlined'}
-              startIcon={<Save />}
-              disabled={saving || !dirty}
-              onClick={onSave}
-              sx={{ fontSize: '0.65rem', py: 0.25 }}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
-          </span>
-        </Tooltip>
-      </Box>
-
       <Typography variant="caption" sx={{ display: 'block', fontSize: '0.6rem', color: 'text.disabled', px: 1, mb: 0.5 }}>
         Click a segment to make it active, then paint on the CT slice.
       </Typography>
@@ -119,25 +74,26 @@ export default function SegmentPanel({
             No segments yet — add one or pick from the structure dictionary.
           </Typography>
         )}
-        {segments.map(seg => (
-          <Box
-            key={seg.id}
-            onClick={() => !seg.approved && onSelectSegment(seg.id)}
-            sx={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 0.25,
-              px: 0.75,
-              py: 0.35,
-              borderRadius: 0.5,
-              cursor: seg.approved ? 'default' : 'pointer',
-              border: '1px solid',
-              borderColor: seg.id === activeSegmentId ? 'rgba(88,196,220,0.6)' : 'transparent',
-              bgcolor: seg.id === activeSegmentId ? 'rgba(88,196,220,0.08)' : 'transparent',
-              opacity: seg.approved ? 0.75 : 1,
-            }}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        {segments.map(seg => {
+          const segType = seg.interpretedType || inferTypeFromName(seg.name);
+          return (
+            <Box
+              key={seg.id}
+              onClick={() => !seg.approved && onSelectSegment(seg.id)}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.25,
+                px: 0.5,
+                py: 0.25,
+                borderRadius: 0.5,
+                cursor: seg.approved ? 'default' : 'pointer',
+                border: '1px solid',
+                borderColor: seg.id === activeSegmentId ? 'rgba(88,196,220,0.6)' : 'transparent',
+                bgcolor: seg.id === activeSegmentId ? 'rgba(88,196,220,0.08)' : 'transparent',
+                opacity: seg.approved ? 0.75 : 1,
+              }}
+            >
               <Checkbox
                 checked={seg.visible}
                 onClick={(e) => e.stopPropagation()}
@@ -146,21 +102,39 @@ export default function SegmentPanel({
                 sx={{ p: 0.25 }}
                 inputProps={{ 'aria-label': `segment-visible-${seg.name}` }}
               />
-              <Box sx={{ width: 12, height: 12, borderRadius: '2px', bgcolor: seg.color, flexShrink: 0 }} />
+              <Box sx={{ width: 10, height: 10, borderRadius: '2px', bgcolor: seg.color, flexShrink: 0 }} />
               <TextField
                 value={seg.name}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => onUpdateSegment(seg.id, { name: e.target.value })}
                 disabled={seg.approved}
                 size="small"
+                variant="standard"
                 fullWidth
-                inputProps={{ 'aria-label': `segment-name-${seg.name}`, style: { fontSize: '0.7rem', padding: '1px 4px' } }}
-                sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.7rem' } }}
+                inputProps={{ 'aria-label': `segment-name-${seg.name}`, style: { fontSize: '0.7rem', padding: '1px 2px' } }}
+                sx={{
+                  minWidth: 0,
+                  '& .MuiInput-root:before, & .MuiInput-underline:before': { borderBottom: 'none' },
+                  '& .MuiInput-root:hover:before': { borderBottom: '1px solid rgba(88,196,220,0.3)' },
+                  '& .MuiInput-root:after': { borderBottom: '1px solid #58c4dc' },
+                }}
               />
+              <Tooltip title={`InterpretedType: ${segType} (drives RTSTRUCT export)`}>
+                <Chip
+                  size="small"
+                  label={segType}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!seg.approved) setTypeMenu({ segId: seg.id, anchorEl: e.currentTarget });
+                  }}
+                  sx={{ height: 15, fontSize: '0.52rem', fontFamily: 'mono', flexShrink: 0,
+                        cursor: seg.approved ? 'default' : 'pointer' }}
+                />
+              </Tooltip>
               <Tooltip title={seg.approved ? 'Approved — click to unlock' : 'Approve (locks this segment)'}>
                 <IconButton
                   size="small"
-                  sx={{ p: 0.25 }}
+                  sx={{ p: 0.25, flexShrink: 0 }}
                   onClick={(e) => { e.stopPropagation(); onUpdateSegment(seg.id, { approved: !seg.approved }); }}
                   aria-label={`segment-approve-${seg.name}`}
                 >
@@ -171,7 +145,7 @@ export default function SegmentPanel({
               </Tooltip>
               <IconButton
                 size="small"
-                sx={{ p: 0.25 }}
+                sx={{ p: 0.25, flexShrink: 0 }}
                 disabled={seg.approved}
                 onClick={(e) => { e.stopPropagation(); onDeleteSegment(seg.id); }}
                 aria-label={`segment-delete-${seg.name}`}
@@ -179,30 +153,8 @@ export default function SegmentPanel({
                 <Delete sx={{ fontSize: 13, color: 'text.secondary' }} />
               </IconButton>
             </Box>
-            {/* InterpretedType selector (drives RTSTRUCT export) */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: 3.5, pb: 0.25 }} onClick={e => e.stopPropagation()}>
-              <Chip
-                size="small"
-                label={seg.interpretedType || inferTypeFromName(seg.name)}
-                sx={{ height: 16, fontSize: '0.55rem', fontFamily: 'mono' }}
-              />
-              <TextField
-                size="small"
-                select
-                value={seg.interpretedType || inferTypeFromName(seg.name)}
-                onChange={(e) => onUpdateSegment(seg.id, { interpretedType: e.target.value })}
-                disabled={seg.approved}
-                aria-label={`segment-type-${seg.name}`}
-                sx={{ minWidth: 90, '& .MuiOutlinedInput-root': { fontSize: '0.6rem', height: 22 } }}
-                inputProps={{ style: { fontSize: '0.6rem', padding: '2px 6px' } }}
-              >
-                {ROI_TYPES.map(t => (
-                  <MenuItem key={t} value={t} sx={{ fontSize: '0.65rem' }}>{t}</MenuItem>
-                ))}
-              </TextField>
-            </Box>
-          </Box>
-        ))}
+          );
+        })}
       </Box>
 
       <Box sx={{ px: 1, pt: 0.5, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
@@ -280,11 +232,31 @@ export default function SegmentPanel({
         )}
       </Menu>
 
+      {/* InterpretedType picker for one segment, opened from its chip */}
+      <Menu
+        anchorEl={typeMenu?.anchorEl ?? null}
+        open={Boolean(typeMenu)}
+        onClose={() => setTypeMenu(null)}
+        PaperProps={{ sx: { maxHeight: 360, minWidth: 160 } }}
+      >
+        {ROI_TYPES.map(t => (
+          <MenuItem
+            key={t}
+            dense
+            onClick={() => {
+              if (typeMenu) onUpdateSegment(typeMenu.segId, { interpretedType: t });
+              setTypeMenu(null);
+            }}
+          >
+            {t}
+          </MenuItem>
+        ))}
+      </Menu>
+
       <Box sx={{ px: 1, pt: 2, display: 'flex', alignItems: 'center', gap: 0.5 }}>
         <Layers sx={{ fontSize: 13, color: 'text.disabled' }} />
         <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.disabled' }}>
-          Painted contours are stored per slice and saved as patient-space
-          polylines (RTSTRUCT-compatible geometry). Type drives export InterpretedType.
+          Contours save per slice and export as RTSTRUCT polylines.
         </Typography>
       </Box>
     </Box>

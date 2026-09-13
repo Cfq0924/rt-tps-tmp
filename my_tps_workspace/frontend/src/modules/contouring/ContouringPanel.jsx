@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import {
   Brush, Clear, CropSquare, Circle, Undo, Redo, Save, FormatColorFill,
-  AutoFixHigh, OpenInFull, Merge, ContentCut, CropFree, FilterCenterFocus,
+  AutoFixHigh, OpenInFull, Merge, ContentCut, CropFree,
 } from '@mui/icons-material';
 import SegmentPanel from './SegmentPanel.jsx';
 
@@ -17,6 +17,31 @@ const TOOLS = [
   { id: 'circle', icon: <Circle fontSize="small" />, label: 'Ellipse fill' },
   { id: 'crop', icon: <CropFree fontSize="small" />, label: 'Crop (drag box)' },
 ];
+
+const opBtnSx = {
+  fontSize: '0.65rem', color: 'text.secondary',
+  borderColor: 'rgba(88,196,220,0.3)', px: 0.75, minWidth: 0, flexShrink: 0,
+};
+
+function MicroLabel({ children }) {
+  return (
+    <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary',
+          fontFamily: 'mono', whiteSpace: 'nowrap', flexShrink: 0 }}>
+      {children}
+    </Typography>
+  );
+}
+
+function NumField({ width = 52, inputProps: inProps, ...rest }) {
+  return (
+    <TextField
+      size="small"
+      {...rest}
+      sx={{ width, flexShrink: 0, '& .MuiOutlinedInput-root': { fontSize: '0.7rem' } }}
+      inputProps={{ style: { fontSize: '0.7rem', padding: '2px 6px' }, ...inProps }}
+    />
+  );
+}
 
 /**
  * ContouringPanel - right panel of the contouring module: paint tools,
@@ -33,6 +58,7 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
   const [outerMm, setOuterMm] = useState(2);
   const [innerMm, setInnerMm] = useState(2);
   const [opNote, setOpNote] = useState('');
+  const activeSeg = c.segments.find(s => s.id === c.activeSegmentId);
 
   const toolButton = (t) => (
     <Tooltip key={t.id} title={t.label}>
@@ -78,17 +104,16 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
           />
         </Box>
         {c.tool === 'crop' && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <TextField
-              size="small" select label="Crop mode" value={c.cropMode}
-              onChange={e => c.setCropMode(e.target.value)}
-              sx={{ flex: 1 }}
-              inputProps={{ style: { fontSize: '0.65rem' } }}
-            >
-              <MenuItem value="keepInside" sx={{ fontSize: '0.7rem' }}>Keep inside</MenuItem>
-              <MenuItem value="keepOutside" sx={{ fontSize: '0.7rem' }}>Keep outside</MenuItem>
-            </TextField>
-          </Box>
+          <NumField
+            select
+            label="Crop mode"
+            width={120}
+            value={c.cropMode}
+            onChange={e => c.setCropMode(e.target.value)}
+          >
+            <MenuItem value="keepInside" sx={{ fontSize: '0.7rem' }}>Keep inside</MenuItem>
+            <MenuItem value="keepOutside" sx={{ fontSize: '0.7rem' }}>Keep outside</MenuItem>
+          </NumField>
         )}
         <Box sx={{ display: 'flex', gap: 0.5 }}>
           <Button size="small" startIcon={<Undo fontSize="small" />} disabled={!c.canUndo}
@@ -100,86 +125,85 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
                   sx={{ fontSize: '0.65rem' }}>{c.saving ? '…' : 'Save'}</Button>
         </Box>
 
-        <Divider sx={{ my: 0.5 }} />
+        {/* structure ops on the active segment */}
+        <Box sx={{ border: '1px solid rgba(88,196,220,0.15)', borderRadius: 1, p: 0.75,
+                   bgcolor: 'rgba(18,32,53,0.6)', display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+            <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary', fontFamily: 'mono', flexShrink: 0 }}>
+              STRUCTURE OPS
+            </Typography>
+            {activeSeg && (
+              <>
+                <Box sx={{ width: 8, height: 8, borderRadius: '2px', bgcolor: activeSeg.color, flexShrink: 0 }} />
+                <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {activeSeg.name}
+                </Typography>
+              </>
+            )}
+          </Box>
 
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-          <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.secondary', fontFamily: 'mono' }}>
-            STRUCTURE OPS (active segment)
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-            <TextField size="small" label="Margin (mm)" defaultValue={3}
-                       id="expand-margin-input" sx={{ width: 90 }}
-                       inputProps={{ style: { fontSize: '0.65rem' } }} />
-            <Button size="small" variant="outlined" startIcon={<OpenInFull fontSize="small" />}
-                    onClick={() => {
-                      const el = document.getElementById('expand-margin-input');
-                      const mm = Number(el?.value) || 3;
-                      c.expandActive(mm, Math.max(1, Math.round(mm / 3)));
-                    }}
-                    sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
-              CTV→PTV
-            </Button>
-            <Tooltip title="Auto body contour on the displayed slice">
-              <Button size="small" variant="outlined" startIcon={<AutoFixHigh fontSize="small" />}
-                      onClick={() => c.autoBodyOnSlice(sliceIdx, getCtPixels?.() ?? null)}
-                      sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
-                Body
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <MicroLabel>Margin</MicroLabel>
+            <NumField id="expand-margin-input" defaultValue={3} inputProps={{ 'aria-label': 'expand-margin-mm' }} />
+            <MicroLabel>mm</MicroLabel>
+            <Box sx={{ flex: 1 }} />
+            <Tooltip title="Expand the active segment by the margin (Eclipse CTV→PTV)">
+              <Button size="small" variant="outlined" startIcon={<OpenInFull fontSize="small" />}
+                      onClick={() => {
+                        const el = document.getElementById('expand-margin-input');
+                        const mm = Number(el?.value) || 3;
+                        c.expandActive(mm, Math.max(1, Math.round(mm / 3)));
+                      }}
+                      aria-label="expand-apply" sx={opBtnSx}>
+                CTV→PTV
               </Button>
             </Tooltip>
           </Box>
 
-          {/* Clean-up: remove small fragments */}
-          <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-            <TextField
-              size="small" label="Min area (mm²)" type="number" value={minAreaMm2}
-              onChange={e => setMinAreaMm2(Number(e.target.value) || 1)}
-              sx={{ width: 100 }}
-              inputProps={{ min: 0.5, step: 0.5, style: { fontSize: '0.65rem' } }}
-            />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <MicroLabel>Min area</MicroLabel>
+            <NumField type="number" value={minAreaMm2} width={48}
+                      onChange={e => setMinAreaMm2(Number(e.target.value) || 1)}
+                      inputProps={{ min: 0.5, step: 0.5, 'aria-label': 'cleanup-min-area' }} />
+            <MicroLabel>mm²</MicroLabel>
+            <Box sx={{ flex: 1 }} />
             <Tooltip title="Eclipse Clean-up: remove connected fragments smaller than min area on every painted slice">
-              <Button
-                size="small" variant="outlined" startIcon={<ContentCut fontSize="small" />}
-                aria-label="cleanup-apply"
-                onClick={() => {
-                  const stats = c.cleanupActive(minAreaMm2);
-                  setOpNote(`Clean-up: removed ${stats.removed} voxels, kept ${stats.kept}`);
-                }}
-                sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}
-              >
+              <Button size="small" variant="outlined" startIcon={<ContentCut fontSize="small" />}
+                      aria-label="cleanup-apply"
+                      onClick={() => {
+                        const stats = c.cleanupActive(minAreaMm2);
+                        setOpNote(`Clean-up: removed ${stats.removed} voxels, kept ${stats.kept}`);
+                      }}
+                      sx={opBtnSx}>
                 Clean-up
               </Button>
             </Tooltip>
           </Box>
 
-          {/* Extract Wall */}
-          <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
-            <TextField
-              size="small" label="Outer (mm)" type="number" value={outerMm}
-              onChange={e => setOuterMm(Number(e.target.value) || 0)}
-              sx={{ width: 88 }}
-              inputProps={{ min: 0, step: 0.5, style: { fontSize: '0.65rem' } }}
-            />
-            <TextField
-              size="small" label="Inner (mm)" type="number" value={innerMm}
-              onChange={e => setInnerMm(Number(e.target.value) || 0)}
-              sx={{ width: 88 }}
-              inputProps={{ min: 0, step: 0.5, style: { fontSize: '0.65rem' } }}
-            />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <MicroLabel>Wall</MicroLabel>
+            <NumField type="number" value={outerMm} width={44}
+                      onChange={e => setOuterMm(Number(e.target.value) || 0)}
+                      inputProps={{ min: 0, step: 0.5, 'aria-label': 'wall-outer-mm' }} />
+            <MicroLabel>−</MicroLabel>
+            <NumField type="number" value={innerMm} width={44}
+                      onChange={e => setInnerMm(Number(e.target.value) || 0)}
+                      inputProps={{ min: 0, step: 0.5, 'aria-label': 'wall-inner-mm' }} />
+            <MicroLabel>mm</MicroLabel>
+            <Box sx={{ flex: 1 }} />
             <Tooltip title="Extract Wall: create a ring segment (outer dilate − inner erode) around the active structure">
-              <Button
-                size="small" variant="outlined" startIcon={<FilterCenterFocus fontSize="small" />}
-                aria-label="extract-wall"
-                onClick={async () => {
-                  try {
-                    const id = await c.extractWallFromActive(outerMm, innerMm);
-                    setOpNote(id ? `Wall segment created (id ${id})` : 'Extract Wall: no wall generated');
-                  } catch (err) {
-                    setOpNote(`Extract Wall failed: ${err.message}`);
-                  }
-                }}
-                sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}
-              >
-                Extract Wall
+              <Button size="small" variant="outlined" aria-label="extract-wall"
+                      onClick={async () => {
+                        try {
+                          const id = await c.extractWallFromActive(outerMm, innerMm);
+                          setOpNote(id ? `Wall segment created (id ${id})` : 'Extract Wall: no wall generated');
+                        } catch (err) {
+                          setOpNote(`Extract Wall failed: ${err.message}`);
+                        }
+                      }}
+                      sx={opBtnSx}>
+                Extract
               </Button>
             </Tooltip>
           </Box>
@@ -190,23 +214,29 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
             </Typography>
           )}
 
+          <Divider sx={{ borderColor: 'rgba(88,196,220,0.12)' }} />
+
           {/* boolean ops: source segment INTO the active segment */}
-          <Box sx={{ display: 'flex', gap: 0.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <MicroLabel>Source</MicroLabel>
             <TextField
-              size="small" select label="Source" value={boolSource}
+              size="small" select value={boolSource}
               onChange={e => setBoolSource(e.target.value)}
-              sx={{ flex: 1.2 }}
-              inputProps={{ style: { fontSize: '0.65rem' } }}
+              sx={{ flex: 1, '& .MuiOutlinedInput-root': { fontSize: '0.7rem' } }}
+              inputProps={{ 'aria-label': 'boolean-source', style: { fontSize: '0.7rem', padding: '2px 6px' } }}
             >
               {c.segments.filter(s => s.id !== c.activeSegmentId && !s.approved).map(s => (
                 <MenuItem key={s.id} value={s.id} sx={{ fontSize: '0.7rem' }}>{s.name}</MenuItem>
               ))}
             </TextField>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <MicroLabel>Op</MicroLabel>
             <TextField
-              size="small" select label="Op" value={boolOp}
+              size="small" select value={boolOp}
               onChange={e => setBoolOp(e.target.value)}
-              sx={{ flex: 1 }}
-              inputProps={{ style: { fontSize: '0.65rem' } }}
+              sx={{ flex: 1, '& .MuiOutlinedInput-root': { fontSize: '0.7rem' } }}
+              inputProps={{ 'aria-label': 'boolean-op', style: { fontSize: '0.7rem', padding: '2px 6px' } }}
             >
               <MenuItem value="union" sx={{ fontSize: '0.7rem' }}>Union</MenuItem>
               <MenuItem value="subtract" sx={{ fontSize: '0.7rem' }}>Subtract</MenuItem>
@@ -219,7 +249,7 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
                   startIcon={<Merge fontSize="small" />}
                   disabled={boolSource === ''}
                   onClick={() => { c.applyBoolean(Number(boolSource), boolOp); setBoolSource(''); }}
-                  sx={{ fontSize: '0.62rem', color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}
+                  sx={opBtnSx}
                 >
                   Apply
                 </Button>
@@ -239,13 +269,6 @@ export default function ContouringPanel({ contouring, sliceIdx, getCtPixels }) {
           onUpdateSegment={c.updateSegment}
           onDeleteSegment={c.deleteSegment}
           onSelectSegment={c.setActiveSegmentId}
-          onUndo={c.undo}
-          onRedo={c.redo}
-          canUndo={c.canUndo}
-          canRedo={c.canRedo}
-          onSave={c.save}
-          saving={c.saving}
-          dirty={c.dirty}
         />
       </Box>
     </Box>
