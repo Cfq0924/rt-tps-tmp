@@ -1218,10 +1218,14 @@ export default function EbrtWorkspace({
               structures={structures}
               dvhResults={dvhResults}
               prescriptionCgy={selectedPlan.prescriptionDoseGy != null ? Math.round(selectedPlan.prescriptionDoseGy * 100) : null}
-              onSaveObjectives={async (objectives) => {
-                await ebrt.updatePlan(selectedPlan.id, { optimization_objectives_json: objectives });
-                await ebrt.selectPlan(selectedPlan.id);
+              onSaveOptimization={async ({ objectives, nto, settings, mlcModel }) => {
+                await ebrt.updatePlan(selectedPlan.id, {
+                  optimization_objectives_json: { objectives, nto },
+                  optimization_settings_json: settings,
+                  mlc_model: mlcModel || undefined,
+                });
               }}
+              onSaveBeam={(beamId, patch) => ebrt.updateBeam(beamId, patch)}
               onLoadDose={() => onLoadDose?.()}
               doseLoading={doseLoading}
             />

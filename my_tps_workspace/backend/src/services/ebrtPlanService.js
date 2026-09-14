@@ -86,6 +86,10 @@ export function validateBeamPayload(b = {}) {
   if (b.purpose !== undefined && !['TREATMENT', 'SETUP'].includes(String(b.purpose).toUpperCase())) {
     return 'purpose must be TREATMENT or SETUP';
   }
+  for (const k of ['x_smooth', 'y_smooth']) {
+    const v = num(b[k]);
+    if (v !== null && (v < 0 || v > 500)) return `${k} must be within 0..500`;
+  }
   return null;
 }
 
@@ -147,6 +151,7 @@ const PLAN_SELECT = `
          dose_per_fraction_gy as dosePerFractionGy, primary_point_name as primaryPointName,
          calc_models_json as calcModelsJson, delta_couch_json as deltaCouchJson,
          optimization_objectives_json as optimizationObjectivesJson,
+         optimization_settings_json as optimizationSettingsJson, mlc_model as mlcModel,
          source_rtplan_file_id as sourceRtplanFileId, created_at as createdAt
   FROM ebrt_plans`;
 
@@ -164,12 +169,15 @@ function getPlanWithBeams(db, id) {
   plan.calcModels = parseJsonField(plan.calcModelsJson);
   plan.deltaCouch = parseJsonField(plan.deltaCouchJson);
   plan.optimizationObjectives = parseJsonField(plan.optimizationObjectivesJson);
+  plan.optimizationSettings = parseJsonField(plan.optimizationSettingsJson);
+  plan.optimizationSettingsJson = undefined;
   plan.optimizationObjectivesJson = undefined;
   plan.calcModelsJson = undefined;
   plan.deltaCouchJson = undefined;
   delete plan.referencePointsJson;
   plan.beams = db.prepare(`
     SELECT id, plan_id as planId, beam_number as beamNumber, name, beam_type as beamType, purpose,
+           use_in_opt as useInOpt, x_smooth as xSmooth, y_smooth as ySmooth, fixed_jaw as fixedJaw,
            energy_mv as energyMv, gantry_angle as gantryAngle, gantry_angle_stop as gantryAngleStop,
            collimator_angle as collimatorAngle, couch_angle as couchAngle,
            jaw_x1 as jawX1, jaw_x2 as jawX2, jaw_y1 as jawY1, jaw_y2 as jawY2, weight,
@@ -264,6 +272,7 @@ const UPDATABLE_PLAN_FIELDS = new Set([
   'heterogeneity_correction', 'approval_status', 'isocenter_x', 'isocenter_y', 'isocenter_z',
   'reference_points', 'course_id', 'target_structure_name', 'dose_per_fraction_gy',
   'primary_point_name', 'calc_models_json', 'delta_couch_json',
+  'mlc_model', 'optimization_settings_json',
   'optimization_objectives_json',
 ]);
 
@@ -298,7 +307,7 @@ export function updatePlan({ id, payload = {}, userId, reqId }) {
       values.push(refPts.value);
       continue;
     }
-    if (k === 'calc_models_json' || k === 'delta_couch_json' || k === 'optimization_objectives_json') {
+    if (['calc_models_json', 'delta_couch_json', 'optimization_objectives_json', 'optimization_settings_json'].includes(k)) {
       // structured JSON fields: validate shapes, store the canonical form
       const parsed = parseJsonField(typeof v === 'string' ? v : JSON.stringify(v));
       if (parsed == null && v != null) throw Object.assign(new Error(`${k} must be valid JSON`), { status: 400 });
@@ -353,8 +362,8 @@ export function addBeam({ planId, payload = {}, userId, reqId }) {
   const info = db.prepare(`
     INSERT INTO ebrt_beams (plan_id, beam_number, name, beam_type, energy_mv, gantry_angle,
       gantry_angle_stop, collimator_angle, couch_angle, jaw_x1, jaw_x2, jaw_y1, jaw_y2, weight,
-      wedge_angle, bolus, purpose)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      wedge_angle, bolus, purpose, use_in_opt, x_smooth, y_smooth, fixed_jaw)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     planId,
     nextNumber,
@@ -370,7 +379,11 @@ export function addBeam({ planId, payload = {}, userId, reqId }) {
     num(payload.weight, 1),
     num(payload.wedge_angle),
     str(payload.bolus),
-    purpose
+    purpose,
+    payload.use_in_opt === undefined ? 1 : (payload.use_in_opt ? 1 : 0),
+    num(payload.x_smooth, 40),
+    num(payload.y_smooth, 30),
+    payload.fixed_jaw === undefined ? 0 : (payload.fixed_jaw ? 1 : 0)
   );
 
   auditLog(db, { reqId, userId, action: 'add_ebrt_beam', resourceType: 'ebrt_beam', resourceId: info.lastInsertRowid, metadata: { planId, beamNumber: nextNumber } });
@@ -389,13 +402,16 @@ export function updateBeam({ beamId, payload = {}, userId, reqId }) {
 
   const allowed = ['name', 'beam_type', 'energy_mv', 'gantry_angle', 'gantry_angle_stop',
     'collimator_angle', 'couch_angle', 'jaw_x1', 'jaw_x2', 'jaw_y1', 'jaw_y2', 'weight',
-    'wedge_angle', 'bolus', 'purpose'];
+    'wedge_angle', 'bolus', 'purpose', 'use_in_opt', 'x_smooth', 'y_smooth', 'fixed_jaw'];
   const updates = [];
   const values = [];
   for (const k of allowed) {
     if (payload[k] === undefined) continue;
+    let v = payload[k];
+    if (k === 'beam_type' || k === 'purpose') v = String(v).toUpperCase();
+    if (k === 'use_in_opt' || k === 'fixed_jaw') v = v ? 1 : 0;
     updates.push(`${k} = ?`);
-    values.push(k === 'beam_type' || k === 'purpose' ? String(payload[k]).toUpperCase() : payload[k]);
+    values.push(v);
   }
   if (updates.length === 0) {
     throw Object.assign(new Error('no updatable fields provided'), { status: 400 });

@@ -39,6 +39,12 @@ function initializeSchema(db) {
   addColumnIfMissing(db, 'ebrt_beams', 'bolus', 'TEXT');
   addColumnIfMissing(db, 'ebrt_beams', 'meterset', 'REAL');
   addColumnIfMissing(db, 'ebrt_beams', 'purpose', "TEXT DEFAULT 'TREATMENT'");
+  addColumnIfMissing(db, 'ebrt_beams', 'use_in_opt', 'INTEGER NOT NULL DEFAULT 1');
+  addColumnIfMissing(db, 'ebrt_beams', 'x_smooth', 'REAL DEFAULT 40');
+  addColumnIfMissing(db, 'ebrt_beams', 'y_smooth', 'REAL DEFAULT 30');
+  addColumnIfMissing(db, 'ebrt_beams', 'fixed_jaw', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'ebrt_plans', 'mlc_model', 'TEXT');
+  addColumnIfMissing(db, 'ebrt_plans', 'optimization_settings_json', 'TEXT');
   addColumnIfMissing(db, 'ebrt_beams', 'leaf_pair_count', 'INTEGER');
   addColumnIfMissing(db, 'ebrt_plans', 'course_id', 'INTEGER REFERENCES courses(id)');
   addColumnIfMissing(db, 'ebrt_plans', 'target_structure_name', 'TEXT');

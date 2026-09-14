@@ -35,6 +35,7 @@ import {
   createOpposingField,
 } from '../services/beamModelService.js';
 import { generateCouchStructure, referencePointDoses } from '../services/couchService.js';
+import { startOptimizationRun, requestStop, getStatus } from '../services/optimizerService.js';
 
 const router = Router();
 
@@ -507,6 +508,40 @@ router.post('/plans/:planId/setup-fields', authMiddleware, (req, res, next) => {
       created.push(preset.name);
     }
     res.status(201).json({ created, plan });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /ebrt/plans/:planId/optimization/start — M3 MVP inverse optimizer
+// (static-field IMRT fluence optimization; async run, poll /status)
+router.post('/plans/:planId/optimization/start', authMiddleware, (req, res, next) => {
+  try {
+    const r = startOptimizationRun({
+      planId: parseInt(req.params.planId, 10),
+      objectives: req.body?.objectives ?? [],
+      nto: req.body?.nto ?? null,
+      settings: req.body?.settings ?? {},
+      userId: req.user.userId,
+      reqId: req.id,
+    });
+    res.json(r);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/plans/:planId/optimization/status', authMiddleware, (req, res, next) => {
+  try {
+    res.json(getStatus(parseInt(req.params.planId, 10)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/plans/:planId/optimization/stop', authMiddleware, (req, res, next) => {
+  try {
+    res.json(requestStop(parseInt(req.params.planId, 10)));
   } catch (err) {
     next(err);
   }

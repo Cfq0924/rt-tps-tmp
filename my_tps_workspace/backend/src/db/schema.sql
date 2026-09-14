@@ -128,6 +128,8 @@ CREATE TABLE IF NOT EXISTS ebrt_plans (
   source_plan_id INTEGER REFERENCES ebrt_plans(id),
   course_id INTEGER REFERENCES courses(id),
   target_structure_name TEXT,
+  mlc_model TEXT,
+  optimization_settings_json TEXT,
   dose_per_fraction_gy REAL,
   primary_point_name TEXT,
   calc_models_json TEXT,
@@ -158,6 +160,10 @@ CREATE TABLE IF NOT EXISTS ebrt_beams (
   wedge_angle REAL,
   bolus TEXT,
   purpose TEXT DEFAULT 'TREATMENT',
+  use_in_opt INTEGER NOT NULL DEFAULT 1,
+  x_smooth REAL DEFAULT 40,
+  y_smooth REAL DEFAULT 30,
+  fixed_jaw INTEGER NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(plan_id, beam_number)
 );
