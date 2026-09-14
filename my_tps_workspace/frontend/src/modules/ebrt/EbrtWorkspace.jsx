@@ -10,7 +10,7 @@ import { MACHINES, DOSE_ALGORITHMS, OPTIMIZATION_ALGORITHMS, NORMALIZATIONS, get
 import PeerReviewPanel from './PeerReviewPanel.jsx';
 import MlcLeafEditor from './MlcLeafEditor.jsx';
 import SubfieldEditor from './SubfieldEditor.jsx';
-import OptimizationPanel from './OptimizationPanel.jsx';
+import OptimizationWindow from './OptimizationWindow.jsx';
 import CoursePropsDialog from './CoursePropsDialog.jsx';
 import ApprovalWizard from './ApprovalWizard.jsx';
 
@@ -56,6 +56,7 @@ export default function EbrtWorkspace({
   const [targetStructure, setTargetStructure] = useState('');
   const [primaryPoint, setPrimaryPoint] = useState('');
   const [approvalWizard, setApprovalWizard] = useState(false);
+  const [optWindowOpen, setOptWindowOpen] = useState(false);
 
   // add-beam form state
   const [beamType, setBeamType] = useState('STATIC');
@@ -223,6 +224,18 @@ export default function EbrtWorkspace({
       setFormError(err.message);
     }
   };
+
+  // Eclipse Planning > Optimization > Optimize… (F7)
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'F7' && selectedPlan) {
+        e.preventDefault();
+        setOptWindowOpen(true);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [selectedPlan]);
 
   // Eclipse Plan Approval wizard (§9): Dose Summary → Delta Couch → Confirm
   const handleApprovalAdvance = () => {
@@ -854,6 +867,13 @@ export default function EbrtWorkspace({
                 </Button>
               </Tooltip>
             )}
+            <Tooltip title="Eclipse Planning > Optimization (F7) — objectives, DVO, MLC optimization">
+              <Button size="small" variant={optWindowOpen ? 'contained' : 'outlined'} startIcon={<Calculate />}
+                      onClick={() => setOptWindowOpen(true)}
+                      sx={{ fontSize: '0.55rem', py: 0.1, color: 'text.secondary', borderColor: 'rgba(88,196,220,0.3)' }}>
+                Optimize…
+              </Button>
+            </Tooltip>
             {selectedPlan.approvalStatus !== 'UNAPPROVED' && (
               <Button size="small" variant="text"
                       onClick={handleApprovalReset}
@@ -1211,25 +1231,6 @@ export default function EbrtWorkspace({
             )}
           </Box>
 
-          {/* workflow S4: optimization objectives + prototype run + live DVH */}
-          {selectedPlan && (
-            <OptimizationPanel
-              plan={selectedPlan}
-              structures={structures}
-              dvhResults={dvhResults}
-              prescriptionCgy={selectedPlan.prescriptionDoseGy != null ? Math.round(selectedPlan.prescriptionDoseGy * 100) : null}
-              onSaveOptimization={async ({ objectives, nto, settings, mlcModel }) => {
-                await ebrt.updatePlan(selectedPlan.id, {
-                  optimization_objectives_json: { objectives, nto },
-                  optimization_settings_json: settings,
-                  mlc_model: mlcModel || undefined,
-                });
-              }}
-              onSaveBeam={(beamId, patch) => ebrt.updateBeam(beamId, patch)}
-              onLoadDose={() => onLoadDose?.()}
-              doseLoading={doseLoading}
-            />
-          )}
 
           {/* workflow S3: quick prescription edit */}
           {selectedPlan && (
@@ -1361,6 +1362,23 @@ export default function EbrtWorkspace({
         </>
       )}
 
+      <OptimizationWindow
+        open={optWindowOpen}
+        plan={selectedPlan}
+        structures={structures}
+        dvhResults={dvhResults}
+        prescriptionCgy={selectedPlan?.prescriptionDoseGy != null ? Math.round(selectedPlan.prescriptionDoseGy * 100) : null}
+        onClose={() => setOptWindowOpen(false)}
+        onSaveOptimization={async ({ objectives, nto, settings, mlcModel }) => {
+          await ebrt.updatePlan(selectedPlan.id, {
+            optimization_objectives_json: { objectives, nto },
+            optimization_settings_json: settings,
+            mlc_model: mlcModel || undefined,
+          });
+        }}
+        onSaveBeam={(beamId, patch) => ebrt.updateBeam(beamId, patch)}
+        onLoadDose={() => onLoadDose?.()}
+      />
       <ApprovalWizard
         open={approvalWizard}
         plan={selectedPlan}

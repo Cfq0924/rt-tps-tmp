@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { Box, Typography, Tabs, Tab, Table, TableBody, TableCell, TableHead,
   TableRow, TextField, Button } from '@mui/material';
 import { toSamplingGeom, trilinearSample } from '../../lib/doseSampling.js';
+import DVHChart from '../evaluation/DVHChart.jsx';
 
 /**
  * EbrtInfoTabs - the Information (Info) window at the bottom of the EBRT
@@ -16,7 +17,7 @@ import { toSamplingGeom, trilinearSample } from '../../lib/doseSampling.js';
  * @param {number|null} props.prescriptionCgy
  * @param {Function|null} props.onPatchCalcModels - ({volumeDose}) => void (persist calc models)
  */
-export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = null, doseMeta = null, prescriptionCgy = null, onPatchCalcModels = null }) {
+export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = null, doseMeta = null, prescriptionCgy = null, isodoseChips = null, onPatchCalcModels = null }) {
   const [tab, setTab] = useState(0);
   const [calcDraft, setCalcDraft] = useState(null);
   // backend point-dose report used when the viewer has no dose grid loaded
@@ -24,7 +25,7 @@ export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = 
   const [remoteError, setRemoteError] = useState('');
 
   useEffect(() => {
-    if (tab !== 2 || doseGrid || !plan?.id) return;
+    if (tab !== 3 || doseGrid || !plan?.id) return;
     let alive = true;
     fetch(`/api/ebrt/plans/${plan.id}/point-doses`, { credentials: 'include' })
       .then(r => (r.ok ? r.json() : Promise.reject(new Error('point dose report failed'))))
@@ -68,6 +69,7 @@ export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto"
             sx={{ minHeight: 26, borderBottom: '1px solid rgba(88,196,220,0.12)',
                   '& .MuiTab-root': { minHeight: 26, fontSize: '0.6rem', fontFamily: 'mono', px: 1.5 } }}>
+        <Tab label="DVH" />
         <Tab label="Fields" />
         <Tab label="Dose Statistics" />
         <Tab label="Reference Points" />
@@ -76,6 +78,29 @@ export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = 
 
       <Box sx={{ flex: 1, overflow: 'auto' }}>
         {tab === 0 && (
+          <Box sx={{ p: 0.75, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+            {(dvhResults ?? []).length === 0 && (
+              <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.disabled' }}>
+                Tick structures in EVALUATION (or the structure tree) to compute DVH curves.
+              </Typography>
+            )}
+            <DVHChart results={dvhResults ?? []} prescriptionCgy={prescriptionCgy} />
+            {isodoseChips && isodoseChips.length > 0 && (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.25 }}>
+                {isodoseChips.map(({ id, color, label }) => (
+                  <Box key={id} component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25,
+                        border: '1px solid rgba(88,196,220,0.2)', borderRadius: 0.5, px: 0.4 }}>
+                    <Box sx={{ width: 6, height: 6, borderRadius: '1px', bgcolor: color }} />
+                    <Typography component="span" sx={{ fontSize: '0.52rem', fontFamily: 'mono', color: 'text.secondary' }}>
+                      {label}
+                    </Typography>
+                  </Box>
+                ))}
+              </Box>
+            )}
+          </Box>
+        )}
+        {tab === 1 && (
           <Table size="small" sx={{ '& .MuiTableCell-root': cellSx }}>
             <TableHead>
               <TableRow>
@@ -108,7 +133,7 @@ export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = 
           </Table>
         )}
 
-        {tab === 1 && (
+        {tab === 2 && (
           <Table size="small" sx={{ '& .MuiTableCell-root': cellSx }}>
             <TableHead>
               <TableRow>
@@ -144,7 +169,7 @@ export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = 
           </Table>
         )}
 
-        {tab === 2 && (
+        {tab === 3 && (
           <Table size="small" sx={{ '& .MuiTableCell-root': cellSx }}>
             <TableHead>
               <TableRow>
@@ -192,7 +217,7 @@ export default function EbrtInfoTabs({ plan = null, dvhResults = [], doseGrid = 
           </Table>
         )}
 
-        {tab === 3 && (
+        {tab === 4 && (
           <>
             <Table size="small" sx={{ '& .MuiTableCell-root': cellSx }}>
               <TableHead>

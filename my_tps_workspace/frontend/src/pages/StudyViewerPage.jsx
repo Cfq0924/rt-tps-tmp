@@ -1105,32 +1105,7 @@ export default function StudyViewerPage() {
             </Box>
           )}
 
-        {/* EBRT quad: DVH pane (TR), coronal + sagittal (BL/BR), info tabs (bottom) */}
-        {isEbrtQuad && (
-          <Box sx={{ gridColumn: 3, gridRow: 1, position: 'relative', minWidth: 0, minHeight: 0,
-                     overflow: 'hidden', borderLeft: '1px solid rgba(88,196,220,0.12)', p: 0.5, boxSizing: 'border-box',
-                     display: 'flex', flexDirection: 'column' }}>
-            <Typography variant="caption" sx={{ px: 0.5, fontSize: '0.55rem', color: 'text.disabled', fontFamily: 'mono' }}>
-              DVH — tick structures in EVALUATION
-            </Typography>
-            <Box sx={{ flex: 1, minHeight: 0 }}>
-              <DVHChart results={dvh.results} prescriptionCgy={prescriptionCgy} />
-            </Box>
-            {(isodoseLevels ?? []).length > 0 && (
-              <Box sx={{ px: 0.5, pb: 0.5, display: 'flex', flexWrap: 'wrap', gap: 0.25 }}>
-                {isodoseLevels.filter(l => l.visible).map(l => (
-                  <Box key={l.id} component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25,
-                        border: '1px solid rgba(88,196,220,0.2)', borderRadius: 0.5, px: 0.4 }}>
-                    <Box sx={{ width: 6, height: 6, borderRadius: '1px', bgcolor: l.color }} />
-                    <Typography component="span" sx={{ fontSize: '0.52rem', fontFamily: 'mono', color: 'text.secondary' }}>
-                      {l.pct}%
-                    </Typography>
-                  </Box>
-                ))}
-              </Box>
-            )}
-          </Box>
-        )}
+        {/* EBRT quad: coronal (TR) + sagittal (BR) MPR — the DVH lives in the Info tabs (DVH tab) */}
         {isEbrtQuad && (
           <Box sx={{ gridColumn: 3, gridRow: 1, position: 'relative', minWidth: 0, minHeight: 0,
                      overflow: 'hidden', borderTop: '1px solid rgba(88,196,220,0.12)' }}>
@@ -1175,6 +1150,7 @@ export default function StudyViewerPage() {
               doseGrid={doseGrid}
               doseMeta={doseData}
               prescriptionCgy={prescriptionCgy}
+              isodoseChips={isodoseLevels.filter(l => l.visible).map(l => ({ id: l.id, color: l.color, label: `${l.pct}%` }))}
               onPatchCalcModels={(patch) => ebrt.updatePlan(ebrt.selectedPlan.id, { calc_models_json: patch })}
             />
           </Box>
