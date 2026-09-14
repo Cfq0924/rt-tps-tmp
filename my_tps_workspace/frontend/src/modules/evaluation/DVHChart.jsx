@@ -74,8 +74,12 @@ export default function DVHChart({ results = [], prescriptionCgy = null }) {
       };
       const step = niceStep(xMaxRaw, 6);
       const xMax = Math.ceil(xMaxRaw / step) * step;
+      // label from the index (never d += step) — avoids float artifacts like
+      // 0.6000000000000001 on the axis
+      const tickLabel = (v) => String(parseFloat(v.toFixed(3)));
       ctx.textAlign = 'center';
-      for (let d = 0; d <= xMax; d += step) {
+      for (let i = 0; i * step <= xMax + step * 1e-6; i++) {
+        const d = i * step;
         const x = padL + (d / xMax) * plotW;
         if (d > 0) {
           ctx.strokeStyle = 'rgba(88,196,220,0.10)';
@@ -84,7 +88,7 @@ export default function DVHChart({ results = [], prescriptionCgy = null }) {
           ctx.lineTo(x, padT + plotH);
           ctx.stroke();
         }
-        ctx.fillText(String(d), x, cssH - padB + 14);
+        ctx.fillText(tickLabel(d), x, cssH - padB + 14);
       }
       ctx.fillText('Dose (cGy)', padL + plotW / 2, cssH - 6);
       ctx.save();

@@ -81,10 +81,12 @@ export default function StructurePanel({
             key={structure.roiNumber}
             disablePadding
             secondaryAction={
+              <Tooltip title="Show/hide this structure's contours">
               <Checkbox
                 edge="end"
                 checked={structure.visible}
                 onChange={() => onToggle(structure.roiNumber)}
+                inputProps={{ 'aria-label': `structure-visibility-${structure.roiNumber}` }}
                 size="small"
                 sx={{
                   color: 'rgba(88,196,220,0.3)',
@@ -95,6 +97,7 @@ export default function StructurePanel({
                   },
                 }}
               />
+              </Tooltip>
             }
           >
             <ListItemButton

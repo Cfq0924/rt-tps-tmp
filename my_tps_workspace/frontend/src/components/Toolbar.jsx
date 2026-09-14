@@ -4,6 +4,7 @@ import {
 } from '@mui/material';
 import {
   PanTool, ZoomIn, Contrast, Layers, ContentCut, Circle, Brush, Clear,
+  Straighten, SquareFoot,
 } from '@mui/icons-material';
 
 // Tool names must match registered tool names in initCornerstone.js
@@ -12,8 +13,8 @@ const TOOLS = [
   { id: 'Zoom', icon: <ZoomIn />, label: 'Zoom' },
   { id: 'WindowLevel', icon: <Contrast />, label: 'Window/Level' },
   { id: 'StackScroll', icon: <Layers />, label: 'Scroll' },
-  { id: 'Length', icon: null, label: 'Length' },
-  { id: 'Angle', icon: null, label: 'Angle' },
+  { id: 'Length', icon: <Straighten />, label: 'Length' },
+  { id: 'Angle', icon: <SquareFoot />, label: 'Angle' },
 ];
 
 const CONTOUR_TOOLS = [
