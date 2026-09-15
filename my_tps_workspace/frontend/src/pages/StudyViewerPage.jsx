@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, AppBar, Toolbar, Typography, IconButton, Button, CircularProgress,
+  Dialog, DialogTitle, DialogContent, DialogActions, TextField,
   Alert, List, ListItem, ListItemButton, ListItemText, Chip, Divider,
   Tooltip, Menu, MenuItem, Tabs, Tab,
 } from '@mui/material';
@@ -122,6 +123,10 @@ export default function StudyViewerPage() {
   const [pacsDialogOpen, setPacsDialogOpen] = useState(false);
   // P3-M2 registration: moving series + current transform (overlay)
   const [movingState, setMovingState] = useState({ movingUid: '', files: null, movingIndex: 0, matrix: null });
+  // AI auto-segmentation dialog (IMAGES toolbar)
+  const [autoSeg, setAutoSeg] = useState({ open: false, organ: '', busy: false, note: '' });
+
+
   // MPR three-plane viewer
   const [mprEnabled, setMprEnabled] = useState(false);
   const [mprState, setMprState] = useState({ volume: null, geom: null, progress: null, error: '' });
@@ -374,30 +379,34 @@ export default function StudyViewerPage() {
     }
   }, [selectedFileId, filesForModality]);
 
-  async function handleAutoSegment() {
+  function handleAutoSegment() {
     const rtStructFiles = files.filter(f => f.modality === 'RTSTRUCT');
     if (rtStructFiles.length === 0) {
       setError('No RTSTRUCT file found for this study. Import one first.');
       return;
     }
+    setAutoSeg({ open: true, organ: '', busy: false, note: '' });
+  }
 
-    const organName = prompt('Enter organ name to segment (e.g., "Liver", "GTV"):');
+  async function runAutoSegment() {
+    const rtStructFiles = files.filter(f => f.modality === 'RTSTRUCT');
+    const organName = autoSeg.organ.trim();
     if (!organName) return;
-
+    setAutoSeg(s => ({ ...s, busy: true }));
     try {
       const res = await fetch('/api/contouring/auto', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileId: rtStructFiles[0].id,
-          organName,
-        }),
+        body: JSON.stringify({ fileId: rtStructFiles[0].id, organName }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Auto-segmentation failed');
-      alert(`Auto-segmentation complete for ${organName}`);
+      if (rtStructFileId) fetchRTSTRUCT(rtStructFileId); // refresh the ROI list
+      setAutoSeg(s => ({ ...s, open: false, busy: false, note: `Auto-segmentation complete for ${organName}` }));
+      setTimeout(() => setAutoSeg(s => ({ ...s, note: '' })), 4000);
     } catch (err) {
+      setAutoSeg(s => ({ ...s, busy: false }));
       setError(err.message);
     }
   }
@@ -934,6 +943,11 @@ export default function StudyViewerPage() {
               {error}
             </Alert>
           )}
+          {autoSeg.note && (
+            <Alert severity="success" sx={{ position: 'absolute', top: 8, left: 8, zIndex: 20, py: 0.25 }}>
+              {autoSeg.note}
+            </Alert>
+          )}
 
           {!csReady ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
@@ -1354,6 +1368,25 @@ export default function StudyViewerPage() {
         </Box>
       </Box>
     </Box>
+      <Dialog open={autoSeg.open} onClose={() => { if (!autoSeg.busy) setAutoSeg(x => ({ ...x, open: false })); }}>
+        <DialogTitle sx={{ fontSize: '0.85rem' }}>AI Auto-Segment</DialogTitle>
+        <DialogContent>
+          <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.disabled' }}>
+            Runs auto-contouring on this study's RTSTRUCT and adds the resulting structure.
+          </Typography>
+          <TextField size="small" label="Organ name" value={autoSeg.organ} autoFocus fullWidth
+                     onChange={e => setAutoSeg(x => ({ ...x, organ: e.target.value }))}
+                     inputProps={{ 'aria-label': 'auto-segment-organ' }} />
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" disabled={autoSeg.busy}
+                  onClick={() => setAutoSeg(x => ({ ...x, open: false }))}>Cancel</Button>
+          <Button size="small" variant="contained" disabled={autoSeg.busy || !autoSeg.organ.trim()}
+                  onClick={runAutoSegment}>
+            {autoSeg.busy ? 'Running…' : 'Run'}
+          </Button>
+        </DialogActions>
+      </Dialog>
   </Box>
   );
 }

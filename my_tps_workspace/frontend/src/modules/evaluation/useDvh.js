@@ -51,6 +51,20 @@ export function useDvh({ roiSequence = [], contourSequence = [], paintedSegments
     setSelected(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
   };
 
+  // Eclipse-style: when dose data is first ready, preselect targets and key
+  // OARs so the DVH opens populated instead of empty (user toggles win after)
+  useEffect(() => {
+    if (!doseReady || allSources.length === 0) return;
+    setSelected(prev => {
+      if (prev.length > 0) return prev;
+      const pick = (re) => allSources.filter(s => re.test(s.name)).map(s => s.key);
+      return [
+        ...pick(/PTV/i), ...pick(/GTV|CTV/i),
+        ...pick(/CORD|BRAIN ?STEM/i), ...pick(/PAROTID/i),
+      ].slice(0, 8);
+    });
+  }, [doseReady, allSources]);
+
   // (re)compute DVH when selection or dose changes
   useEffect(() => {
     if (!doseReady) { setResults([]); return; }
